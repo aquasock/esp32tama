@@ -43,7 +43,21 @@ struct gplb {
     uint8_t  a, x, y, sp;
     uint8_t  nf, vf, bf, df, if_, zf, cf;
 
-    uint8_t  ireq, int_enbl;
+    /* Interrupts are 16 vectors at $FFC0-$FFDF. $3076 enables vectors 5-11
+     * (bit 7 = global); $3073/$3074 acknowledge them; the ROM writes one bit
+     * per source it services. See the mapping note above io_write_side_effects. */
+    uint16_t irq_enabled;        /* one bit per vector */
+    uint16_t irq_pending;
+    uint8_t  irq_global;
+
+    /* TIMER1. The datasheet lists TIMER1 among the NMI sources, and the ROM's
+     * NMI handler ($D26B) is the only code that sets $01A7=$80 - the flag the
+     * main loop spins on. So the game tick is TIMER1 underflow -> NMI. */
+    uint32_t t1_reload, t1_count;
+    uint32_t t1_prescale;        /* CPU cycles per timer tick */
+    uint32_t t1_acc;             /* cycles accumulated toward the next tick */
+    uint8_t  nmi_pending;
+    uint64_t nmi_count, irq_count;
     uint8_t  page_crossed;   /* set by abs,X / abs,Y / (zp),Y addressing */
     uint8_t  branch_taken;   /* set by the branch instructions */
 
@@ -82,6 +96,16 @@ static inline void set_ps(gplb *c, uint8_t ps)
  * 32 KB bank: bank 3 addressed at $B383 resolves to offset 0x7383 in bank 3.
  */
 #define IO_ROM_BANK 0x0000   /* $3000 */
+#define IO_IRQ_ACK_LO 0x0073 /* $3073 - ack vectors 0-7,  bit 7-v */
+#define IO_IRQ_ACK_HI 0x0074 /* $3074 - ack vectors 8-15, bit 15-v */
+#define IO_IRQ_ENBL 0x0076   /* $3076 - bit 7 global, bits 0-6 per vector */
+#define IO_IRQ_ENBH 0x0077   /* $3077 - second enable byte */
+/* TIMER1 reload. The ROM writes the high byte first and the low byte second
+ * ($3015 then $3014), so $3014 is the high half. Reading them the other way
+ * round makes the counter ~32000 instead of 382 and the frame tick drops to
+ * 1.5 Hz. */
+#define IO_T1_HI    0x0014   /* $3014 - TIMER1 reload, high byte */
+#define IO_T1_LO    0x0015   /* $3015 - TIMER1 reload, low byte */
 
 /* IO write trace, for working out register semantics from the firmware. */
 #include <stdio.h>
@@ -94,12 +118,80 @@ static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
     if (gplb_io_trace && gplb_io_writes < 400)
         fprintf(stderr, "IO %04X <- %02X\n", 0x3000 + idx, v);
 
-    if (idx == IO_ROM_BANK) {
+    if (gplb_io_trace && idx >= 0x70 && idx <= 0x77)
+        fprintf(stderr, "IRQREG %04X <- %02X (pc=%04X)\n",
+                0x3000 + idx, v, c->pc);
+
+    switch (idx) {
+    case IO_ROM_BANK: {
         uint32_t bank = (uint32_t)v * 0x8000u;
         if (0x4000u + bank < c->rom_len)
             c->rom_bank = bank;
+        break;
+    }
+    case IO_IRQ_ENBL: {
+        /* Write-one-to-set. A zero write leaves the latch alone.
+         *
+         * Plain-write semantics deadlock this firmware: the boot path sets $82
+         * at $7699, then $76BB writes $00, and every later NMI handler
+         * ($D26B/$D271) writes $00 again. With zeros honoured, nothing is ever
+         * enabled, vector 10 never runs, the $2D flag at $CE75 is never set and
+         * the device spins forever in the idle loop - measured: irq=0 over 20M
+         * instructions, display RAM frozen. With the latch, the same run gives
+         * a live main loop (body executes, bank changes 293 times in 4M
+         * instructions) and $2D toggles. So zeros are not a disable here. */
+        if (v == 0) break;
+        c->irq_global = (uint8_t)(v >> 7);
+        c->irq_enabled = 0;
+        for (int b = 0; b < 7; b++)
+            if (v & (1u << b)) {
+                /* The ROM never writes a mask bit for vector 10, yet it waits
+                 * on a flag only that handler sets. Bit 1 of $3076 ($82) must
+                 * therefore select vector 10, so the byte runs downwards. */
+                int vec = 11 - b;
+                if (vec >= 0 && vec <= 15) c->irq_enabled |= (uint16_t)(1u << vec);
+            }
+        if (gplb_io_trace)
+            fprintf(stderr, "  -> enabled=%04X global=%d\n",
+                    c->irq_enabled, c->irq_global);
+        break;
+    }
+    case IO_IRQ_ENBH: {
+        /* Second enable byte runs the same way for vectors 12-15 is unknown;
+         * the ROM only ever stores a status read here, so treat it as such. */
+        break;
+    }
+    case IO_T1_HI:
+    case IO_T1_LO: {
+        /* Rebuild from the live register image: the second byte of each pair
+         * lands after the first, so acting on either byte alone would latch a
+         * half-written reload. */
+        uint32_t r = ((uint32_t)c->io[IO_T1_HI] << 8) | (uint32_t)c->io[IO_T1_LO];
+        if (r != 0) { c->t1_reload = r; c->t1_count = r; }
+        break;
+    }
+    case IO_IRQ_ACK_LO:
+    case IO_IRQ_ACK_HI: {
+        int base = (idx == IO_IRQ_ACK_LO) ? 0 : 8;
+        for (int b = 0; b < 8; b++)
+            if (v & (1u << b)) {
+                int vec = base + (7 - b);
+                if (vec >= 0 && vec <= 15) c->irq_pending &= (uint16_t)~(1u << vec);
+            }
+        if (gplb_io_trace) fprintf(stderr, "  -> ack %02X, pending=%04X\n",
+                                   v, c->irq_pending);
+        break;
+    }
+    default:
+        break;
     }
 }
+
+/* Read-hit counters. Declared outside the flat-RAM switch because the accessor
+ * gplb_io_reads() is built in every configuration; in flat mode nothing counts
+ * IO reads, so it honestly reports zero. */
+static unsigned long io_read_hits[GPLB_IO_SIZE];
+uint16_t gplb_last_reader = 0;
 
 #ifdef GPLB_FLAT_RAM
 /* Test-only: a flat 64 KB RAM, so a conformance suite can be loaded whole.
@@ -124,8 +216,11 @@ static inline uint8_t read8(gplb *c, uint32_t addr)
     if (addr < GPLB_RAM_SIZE) return c->ram[addr];
     if (addr >= GPLB_DPRAM_BASE && addr < GPLB_DPRAM_BASE + GPLB_DPRAM_SIZE)
         return c->dpram[addr - GPLB_DPRAM_BASE];
-    if (addr >= GPLB_IO_BASE && addr < GPLB_IO_BASE + GPLB_IO_SIZE)
+    if (addr >= GPLB_IO_BASE && addr < GPLB_IO_BASE + GPLB_IO_SIZE) {
+        io_read_hits[addr - GPLB_IO_BASE]++;
+        if (addr - GPLB_IO_BASE == 0x16) gplb_last_reader = c->pc;
         return c->io[addr - GPLB_IO_BASE];
+    }
     if (addr >= GPLB_ROM_FIXED)
         return c->rom[addr & 0x3FFF];
     /* ROM image layout: [0x0000:0x4000] fixed 16 KB bank, then 32 KB bank
@@ -242,14 +337,51 @@ static inline uint8_t pull(gplb *c)
     return read8(c, (uint32_t)(SP_PAGE | c->sp));
 }
 
-static void do_irq(gplb *c)
+/* Common interrupt entry: the CPU pushes PC high, PC low, status, sets I and
+ * jumps through the two-byte vector at `va`. Whether status bit 4 is set is
+ * the caller's business - BRK pushes 1, hardware interrupts push 0 - so this
+ * never touches bf. */
+static void enter_interrupt(gplb *c, uint16_t va)
 {
     push(c, (uint8_t)(c->pc >> 8));
     push(c, (uint8_t)(c->pc & 0xFF));
     push(c, get_ps(c));
     c->if_ = 1;
-    c->pc = (uint16_t)(read8(c, 0xFFFE) | (read8(c, 0xFFFF) << 8));
+    c->pc = (uint16_t)(read8(c, va) | (read8(c, va + 1) << 8));
 }
+
+/* NMI is non-maskable: the ROM's frame handler at $D26B runs even with the
+ * I flag set, which is how it can tick while the main loop is inside SEI
+ * sections. Unlike BRK/IRQ it pushes P with bit 5 set and bit 4 clear. */
+static void do_nmi(gplb *c)
+{
+    c->bf = 0;
+    enter_interrupt(c, 0xFFFA);
+    c->nmi_count++;
+}
+
+/* Sixteen vectors live at $FFC0-$FFDF, two bytes each; the datasheet only
+ * documents the first twelve ($FFC0-$FFEF). The index is the source number:
+ * vector[3] acks $10 ($3073 bit 4), vector[7] acks $01 (bit 0), vector[10]
+ * acks $20 ($3074 bit 5), vector[13] acks $04 ($3074 bit 2). In general the
+ * ack is $3073/3074 bit 7-(v&7), which fixes the order.
+ */
+static void do_irq(gplb *c, int vec)
+{
+    if (vec < 0 || vec > 15) return;
+    c->bf = 0;
+    enter_interrupt(c, (uint16_t)(0xFFC0 + vec * 2));
+    c->irq_count++;
+}
+
+/* BRK and a maskable IRQ that reaches the CPU through the ordinary interrupt
+ * pin both use the hardware vector at $FFFE, not the peripheral table. */
+static void do_hw_irq(gplb *c)
+{
+    enter_interrupt(c, 0xFFFE);
+}
+
+
 
 /* ---- addressing modes -------------------------------------------------- */
 static inline uint32_t am_zp(gplb *c)   { return read8(c, (uint32_t)c->pc++); }
@@ -365,7 +497,7 @@ static void exec_op_sem(gplb *c, uint8_t op)
          * $37D5/$37DC by reading the pushed address back off the stack. */
         c->pc = (uint16_t)((c->pc + 1) & 0xFFFF);
         c->bf = 1;
-        do_irq(c);
+        do_hw_irq(c);   /* BRK uses the hardware IRQ vector at $FFFE */
         return;
     case 0x40: c->sp = (uint8_t)((c->sp + 1) & 0xFF); set_ps(c, read8(c, SP_PAGE | c->sp));
                c->sp = (uint8_t)((c->sp + 1) & 0xFF); c->pc = read8(c, SP_PAGE | c->sp);
@@ -629,8 +761,37 @@ uint32_t gplb_step(gplb *c)
 
     c->cycles += raw;
 
-    if (!c->if_ && (c->ireq & c->int_enbl))
-        do_irq(c);
+    /* TIMER1 counts down from its reload and raises NMI when it wraps. */
+    if (c->t1_reload) {
+        c->t1_acc += raw;
+        while (c->t1_acc >= c->t1_prescale) {
+            c->t1_acc -= c->t1_prescale;
+            if (c->t1_count == 0) {
+                c->t1_count = c->t1_reload;
+                /* One frame tick. It reaches the ROM two ways: as NMI, whose
+                 * handler ($D26B) sets the $01A7 flag the boot path waits on,
+                 * and as vector 10, whose handler ($D166) sets the $2D flag the
+                 * main loop waits on. Both waits exist and only these two
+                 * handlers set those flags, so both belong to this event. */
+                c->nmi_pending = 1;
+                c->irq_pending |= (uint16_t)(1u << 10);
+            } else {
+                c->t1_count--;
+            }
+        }
+    }
+
+    if (c->nmi_pending) {
+        c->nmi_pending = 0;
+        do_nmi(c);
+        return raw;
+    }
+
+    if (!c->if_ && c->irq_global) {
+        uint16_t pend = (uint16_t)(c->irq_pending & c->irq_enabled);
+        for (int vec = 0; pend && vec < 16; vec++)
+            if (pend & (1u << vec)) { do_irq(c, vec); break; }
+    }
 
     return raw;
 }
@@ -671,8 +832,18 @@ void gplb_reset(gplb *c)
     c->a = c->x = c->y = 0;
     c->sp = 0xFF;
     set_ps(c, 0x24);
-    c->ireq = c->int_enbl = 0;
+    c->irq_enabled = c->irq_pending = 0;
+    c->irq_global = 0;
     c->instrs = c->cycles = 0;
+
+    /* TIMER1 defaults. The prescaler is the one number the datasheet text we
+     * have does not pin down; 256 CPU cycles per tick puts the ROM's reload of
+     * $017E at ~61 Hz, which matches a 64-common LCD frame. */
+    c->t1_prescale = 256;
+    c->t1_acc = 0;
+    c->t1_reload = c->t1_count = 0;
+    c->nmi_pending = 0;
+    c->nmi_count = 0;
 
     /* vectors live in the fixed bank */
     c->pc = (uint16_t)(read8(c, 0xFFFC) | (read8(c, 0xFFFD) << 8));
@@ -685,6 +856,10 @@ void gplb_snapshot(const gplb *c, gplb_state *s)
     s->p = get_ps(c);
     s->instrs = c->instrs;
     s->cycles = c->cycles;
+    s->nmi = c->nmi_count;
+    s->irq = c->irq_count;
+    s->t1_reload = c->t1_reload;
+    s->t1_count = c->t1_count;
     s->rom_bank = c->rom_bank;
     memcpy(s->ram, c->ram, sizeof(s->ram));
     memcpy(s->dpram, c->dpram, sizeof(s->dpram));
@@ -693,6 +868,13 @@ void gplb_snapshot(const gplb *c, gplb_state *s)
 const uint8_t *gplb_dpram(const gplb *c) { return c->dpram; }
 uint8_t *gplb_io_regs(gplb *c) { return c->io; }
 uint8_t gplb_peek(gplb *c, uint32_t addr) { return read8(c, addr); }
+
+unsigned long gplb_io_reads(gplb *c, int idx)
+{
+    (void)c;
+    if (idx < 0 || idx >= GPLB_IO_SIZE) return 0;
+    return io_read_hits[idx];
+}
 
 /* Test hook: jump the core to an address without touching memory. */
 void gplb_force_pc(gplb *c, uint16_t pc) { c->pc = pc; }

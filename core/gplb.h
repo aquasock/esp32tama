@@ -5,7 +5,8 @@
  * peripherals: 1536 bytes RAM, 320 KB or 640 KB ROM, 6 MHz, a 64x32 dot LCD
  * with 4 grey levels, an 8-channel SPU and two 16-bit timers.
  *
- * CPU and memory map are implemented. Timers, LCD driver and SPU are not.
+ * CPU, memory map, per-source interrupt vectors, and TIMER1 (as an NMI source)
+ * are implemented. LCD driver and SPU are not.
  */
 
 #ifndef GPLB_H
@@ -38,6 +39,8 @@ typedef struct {
     uint8_t  a, x, y, sp, p;
     uint32_t rom_bank;
     uint64_t instrs, cycles;
+    uint64_t nmi, irq;
+    uint32_t t1_reload, t1_count;
     uint8_t  ram[GPLB_RAM_SIZE];
     uint8_t  dpram[GPLB_DPRAM_SIZE];
 } gplb_state;

@@ -117,12 +117,49 @@ Everything learned about IO so far came from reading the firmware:
 Reconstructing the rest is empirical work of unknown size. That is the real
 reason this is not simply "another 6502 port".
 
+## Interrupts and the clock tick (done)
+
+The firmware is driven by a periodic tick, and it took three findings to model
+it correctly. All three are measured, not guessed.
+
+**The vector table has sixteen entries, not twelve.** `$FFC0-$FFDF`, two bytes
+each. The index is the source number, and the acknowledge confirms the order:
+vector[3] acks `$10` (`$3073` bit 4), vector[7] acks `$01` (bit 0), vector[10]
+acks `$20` (`$3074` bit 5), vector[13] acks `$04` (`$3074` bit 2). Four
+independent handlers, one rule: `$3073`/`$3074` bit `7-(v&7)`.
+
+**The tick arrives as TIMER1 underflow, and it raises both NMI and vector 10.**
+The datasheet lists TIMER1 among the NMI sources. The NMI handler at `$D26B` is
+the only code that sets `$01A7=$80`, and the boot path at `$769C` spins on
+exactly that. Later the main loop at `$CE75` spins on `$2D`, which only the
+vector-10 handler at `$D166` sets. One hardware event, two waits.
+
+**The TIMER1 reload is written high byte first.** `$3014` is the high half,
+`$3015` the low. Read the other way round the counter latches `$7E01` instead
+of `$017E`, and the tick falls to 1.5 Hz. With the byte order fixed and a 256
+cycle prescaler the reload of `$017E` gives 61.2 Hz, which matches a 64-common
+LCD frame.
+
+**`$3076` is write-one-to-set.** A plain-write reading deadlocks the firmware:
+the boot path writes `$82` at `$7699`, then `$76BB` writes `$00`, and every NMI
+handler writes `$00` again, so nothing is ever enabled. Measured with zeros
+honoured: `irq=0` across 20M instructions and a frozen screen. With the latch:
+the main loop body executes, `$2D` toggles, and the ROM changes bank 293 times
+in 4M instructions. So the firmware's own behaviour rules out plain writes.
+
 ## Assessment
 
-The CPU is done and verified. The memory map is now correct for what the
-firmware uses. The firmware runs to a stable, meaningful wait state rather than
-crashing.
+The CPU is verified bit-exact (Klaus Dormann's suite, `pc=$3469`, 30,646,176
+instructions — unchanged by the interrupt work). The memory map is correct for
+what the firmware uses, the interrupt controller is modelled, and the tick runs
+at the right rate.
 
-**No picture yet**, and the display will not appear until the timers or the LCD
-frame interrupt are modelled. But the emulator is now blocked on a specific,
-named thing rather than on unknown breakage.
+The firmware now reaches its main loop at `$CE3C`/`$CE66` and cycles it, rather
+than spinning in the boot wait or crashing.
+
+**No picture yet.** Display RAM `$1000-$11FF` is written once and then frozen,
+and the contents are LCD test patterns (`$55`, `$AA`, `$FF`, `$88`) rather than
+a scene. Two candidates: the ROM is running an LCD self-test that never
+completes, or the display layout is not the assumed 64x32 one-bit-per-dot
+bitmap. Next step is to instrument the display writes and find the routine that
+fills `$1000`.
