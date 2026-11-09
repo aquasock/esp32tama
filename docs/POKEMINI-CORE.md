@@ -94,23 +94,82 @@ title cannot exceed it and still run at full speed on real hardware.
 
 ## What this means for the port
 
-Extrapolating the host figure to the ESP32-S3 is arithmetic, not measurement,
-and is stated as such. The core runs at **107–194 M instructions/sec** on this
-machine depending on run length; call it 150 M as a working figure. The
-ESP32-S3's Xtensa LX7 at 240 MHz is roughly 20–40× slower than a desktop x86
-core on integer code of this shape, which puts it at **3.75–7.5 M
-instructions/sec — 3.75× to 7.5× realtime.**
+The host figure cannot be scaled to the target by a ratio — any such ratio would
+be invented. What can be said is a **conditional bound**, which is enough to
+decide whether to keep going:
 
-Even the pessimistic end leaves headroom, and crucially the CPU is *not* the
-binding constraint: the display path is. See `POKEMINI-DISPLAY-GATE.md`.
+- Realtime needs 1 M emulated instructions per second.
+- That leaves **240 cycles per emulated instruction** at 240 MHz.
+- A large-switch interpreter costs tens of cycles per emulated instruction, not
+  hundreds. On this host the core runs at ~150 M instructions/sec on a core
+  clocking several GHz, which is on the order of **20–40 cycles per emulated
+  instruction** — so the instruction count per emulated instruction is in the
+  tens, comfortably.
 
-This must still be measured on the target before any UI work. The whole point
-of doing the gate first is that an estimate is not a measurement.
+If the Xtensa port lands anywhere in the same order, realtime follows. It would
+have to be *six to ten times* worse than the x86 codegen to miss, which is not a
+plausible gap for straightforward C. But this is reasoning, not a measurement,
+and it is exactly the kind of reasoning that produced the Tama-Go detour.
+
+Even so, the CPU is *not* the binding constraint — the display path is. See
+`POKEMINI-DISPLAY-GATE.md`. That is why the remaining risk sits in the panel,
+not here.
+
+This must still be measured on the target before any UI work.
+
+## Target build — verified, not yet timed
+
+The core cross-compiles for Xtensa/ESP32-S3 with the PlatformIO toolchain
+(`toolchain-xtensa-esp-elf`, GCC 14.2.0). Every vendored source file compiles
+clean. Reproduce with:
+
+```
+./tools/pokemini_size.sh
+```
+
+```
+Xtensa ESP32-S3 footprint, -O2 -DPERFORMANCE:
+  114,708 text    41 data    14,984 bss    129,733 total
+```
+
+Largest contributors: `MinxCPU_CE` 18.1 KB, `MinxCPU_XX` 15.2 KB,
+`CommandLine` 15.1 KB, `PokeMini` 20.7 KB, `MinxCPU_CF` 7.9 KB.
+
+`-DPERFORMANCE` costs **1,220 bytes of extra text** (114,708 vs 113,488) for a
+measured 24 % speed gain on the host. That is obviously the right trade and
+should be on for the target.
+
+Two notes for a target port:
+
+- **`CommandLine` is 15 KB of config parser** that a shipped emulator does not
+  need. It is not free to remove — `PokeMini_Create` reads
+  `CommandLine.synccycles` — but a target port that hardcodes those fields
+  would recover most of it.
+- **129 KB total** is comfortable next to Linux and the display driver on a
+  16 MB flash part, but it is text, so it lives in flash rather than RAM. Only
+  the 15 KB of `.bss` (framebuffers, RAM buffers) is actual memory pressure.
+
+### What is still not measured
+
+**The frame rate on the watch.** No Xtensa simulator is available here (no
+`qemu-system-xtensa`, and `perf`/`valgrind` are both blocked on this host), and
+the board is in use by the display-driver work, so there is no way to time the
+core on target from this session.
+
+This matters more than it sounds, because the obvious shortcut — "it already
+runs on a 67 MHz ARM9, so it must be fast enough" — does not hold up. The NDS
+port emulates a frame and then waits for the next 72 Hz tick with **no frameskip
+and no catch-up**, so a console that cannot finish inside 13.9 ms runs slow
+silently. An existing port proves portability, not speed. See the correction
+note in `POKEMINI-SCOPE.md`.
 
 ## Next steps
 
-1. Cross-compile `tools/pokemini_bench.c` for the ESP32-S3 and run it there.
-   That converts the extrapolation above into a number.
+1. Time the core on the watch. The core compiles for the target (above); what
+   is missing is a run. Either build the `xtensa-esp32s3-linux-uclibcfdpic`
+   toolchain described in `Escapement/docs/toolchain.md` and cross-compile the
+   harness, or add a few lines to an existing on-device binary. This is the only
+   step that converts the extrapolation into a measurement.
 2. Confirm the display-path numbers from `POKEMINI-DISPLAY-GATE.md` once the
    board is free.
 3. Only then start the front end.

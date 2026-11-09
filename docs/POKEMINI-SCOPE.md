@@ -43,8 +43,8 @@ insulates us from the panel details but means the PRC must be modelled.
 
 So the plan is **not** "write an S1C88 core". It is "port PokeMini's core to the
 T-Watch and wire it to the V3's existing front end". That removes the largest
-and riskiest piece of work, and the NDS port is the existence proof for the
-performance question.
+and riskiest piece of work. The performance question is still open, though —
+see the note below on why an existing port does not settle it.
 
 ## Performance — measured, then estimated
 
@@ -73,12 +73,34 @@ A dedicated gate report on the display path is in
 available at 3x zoom using dirty rectangles on the current driver, and far more
 with DMA.
 
-**This is an estimate, not a measurement.** The decisive evidence is that
-PokeMini runs at playable speed on a **67 MHz ARM9**, which is a quarter of the
-ESP32-S3's clock and a weaker core. That makes full speed very likely, but the
-only honest confirmation is to build it and measure on the watch — exactly the
-mistake made with the Tama-Go, where a plausible model was built for a week
-before checking whether prior art existed.
+**This is an estimate, not a measurement.**
+
+> **Correction.** An earlier version of this page called the NDS port "the
+> existence proof" that PokeMini runs at playable speed on weak hardware. That
+> was an inference I could not substantiate, and reading the port disproves the
+> strong form of it. `platform/nds/PokeMini_NDS.c` emulates one frame and then
+> waits for the next 72 Hz tick:
+>
+> ```c
+> PokeMini_EmulateFrame();
+> do { time = vfpscounter; } while (time < nexttime);
+> nexttime = time + 1;
+> ```
+>
+> There is **no frameskip and no catch-up**. A console that cannot finish a
+> frame inside 13.9 ms simply runs below realtime, silently — the wait loop
+> falls straight through. So an existing port proves the code is *portable*, not
+> that it is *fast enough*. The repo does not state the NDS frame rate
+> anywhere.
+
+What is actually established: the core is portable to 67 MHz ARM9, 200 MHz
+SH-4, 333 MHz MIPS and 360 MHz MIPS class hardware, and it builds for
+Xtensa/ESP32-S3 at **114 KB of text**. What is not established is the frame
+rate any of those achieve.
+
+The only honest confirmation is to measure on the watch — exactly the mistake
+made with the Tama-Go, where a plausible model was built for a week before
+checking whether prior art existed.
 
 ## The real gate is the display path, not the CPU
 
