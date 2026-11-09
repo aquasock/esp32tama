@@ -108,6 +108,57 @@ its `#if` comes first — that is harmless for a P1, because the E0C6S46 map and
 the first 40 entries of the E0C6S48 map are **byte-identical** (verified), and a
 P1 ROM never addresses the extra 11 segments.
 
+## Digimon — same chip, different wiring
+
+Digimon is the obvious question, since the 1997 Digital Monster is an E0C6200
+device too. The answer is measured, not assumed.
+
+**Same CPU.** The Digimon V-Pet (1997) is an Epson E0C6200 with **8,192 twelve-bit
+instructions**, nibble-wide memory, a **32 × 16** dot LCD, three buttons and a
+metal prong. That is the same family, the same ROM size and the same screen
+geometry as the P1. TamaLib's `cpu.c` is a general E0C6200 implementation, so
+its CPU core would execute Digimon firmware.
+
+**Different LCD wiring, and that is the whole problem.** TamaLib's `hw.c` holds
+a hardcoded segment table for the Tamagotchi devices. Compared against the
+measured Digimon LCD layout (published in `willmcginnis/digimon-vpet-1997-disassembly`,
+`data/lcd_layout.json`):
+
+```
+TamaLib E0C6S46 table vs Digimon layout: 4 of 520 entries agree (0.8 %)
+```
+
+Different in essentially every position, so a Digimon ROM dropped into this
+front end today would run at full speed and draw nonsense.
+
+**The fix is bounded and known.** Digimon's layout fits TamaLib's model exactly
+— x is a pure function of the segment and y of the common, with no conflicts
+across all 512 pixel entries (verified). So it is a drop-in replacement table,
+not a rewrite:
+
+```
+Digimon seg_pos (37 entries):
+{-, 31, 30, 29, 28, 27, 26, 25, 24, -, -, -, 23, 22, 21, 20, 19, 18, 17, 16,
+  0,  1,  2,  3,  4,  5,  6,  7, -,  8,  9, 10, 11, 12, 13, 14, 15}
+```
+
+The 8 icons are `BATTLE CALL FEED FLUSH LIGHT MEDIC STATUS TRAIN` — same count as
+the Tamagotchi line, different meaning.
+
+**So the work to add Digimon is:**
+
+1. A per-device segment table instead of the compiled-in `seg_pos`, selected at
+   load. Small.
+2. A device-detection step. Digimon ROMs are also 12,288 bytes / 6,144 words,
+   so size does not distinguish them — TamaTool's CRC table would need extending.
+3. Icon handling for the eight Digimon indicators.
+4. **A Digimon ROM.** None exists on this machine, so none of the above can be
+   verified.
+
+**And the prior-art caveat still applies:** BrickEmuPy already emulates Digimon
+V1–V4 (that is what the Digimon disassembly project runs on), so this is another
+"already exists" case rather than new ground.
+
 Not covered by any of this: the **Connection series** (V1–V6, which is what our
 V3 core is), Tamagotchi Friends, and everything colour. Those are different
 hardware entirely.
