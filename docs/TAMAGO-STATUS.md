@@ -191,6 +191,30 @@ evenly spaced dashes, and a circle in the lower middle. That is an **LCD test
 pattern**, not a scene — so the firmware is drawing to prove the panel works and
 then stopping.
 
-The scene that should follow is waiting on something. The V3 asks for the clock
-to be set before it draws a pet, and this ROM is no different; the RTC is the
-next peripheral to model.
+Rendered at 48 dots wide (12 bytes x 4 dots at 2bpp) the buffer resolves into
+distinct UI shapes rather than noise, so the row pitch is right even though the
+48-dot width does not match the datasheet's 64 segments. Treat 12 bytes as
+measured and the dot width as still open.
+
+## What the firmware actually reads
+
+Only five IO registers are ever read, which narrows the peripherals a long way:
+
+```
+$3000   368       ROM bank, saved and restored around every handler
+$3012   734       read during the timer setup paths
+$3016   71145     the hot one - a port with latched outputs and sensed inputs
+$3032   1         IR reply byte
+$3033   1         IR reply byte
+```
+
+`$3016` being read 71,145 times and written back as a read-modify-write settles
+what it is: an **I/O port**, not a status register. Its handling at `$C651`
+reads the pins, writes the value to `$3077`, tests bit 6, and writes the value
+back with bit 6 optionally set — a debounced key scan with an output latch. So
+the 71k reads are button polling, and returning a constant `$07` makes the ROM
+see a fixed, never-changing key state.
+
+The RTC, by contrast, is never read at all. That rules out "waiting for the
+clock to be set" as the reason the scene does not appear: there is no time
+register traffic to wait on.
