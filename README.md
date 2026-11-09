@@ -9,7 +9,7 @@ Runs the real firmware. Boots, hatches, needs feeding, connects over infrared.
 core/         SPLB32 CPU, EEPROM, IR link, audio  — no dependencies
 frontends/    SDL2 desktop window, Linux framebuffer, benchmark driver
 tools/        build script, differential test tools, segment map generator
-docs/         validation record, bug list, audit
+docs/         validation record, bug list, audit, candidate survey
 ```
 
 ## Why
