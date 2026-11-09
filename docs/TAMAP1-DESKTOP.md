@@ -163,6 +163,56 @@ Not covered by any of this: the **Connection series** (V1–V6, which is what ou
 V3 core is), Tamagotchi Friends, and everything colour. Those are different
 hardware entirely.
 
+## ROM identification — verified against MAME
+
+The operator's `rom.bin` is **byte-identical to MAME's known-good dump**, which is
+an independent corroboration that the emulator is running real, correct firmware
+rather than a corrupt read:
+
+```
+                size     crc32      sha1
+our rom.bin     12288    5c864cb1   4b4979cf92dc9d2fb6d7295a38f209f3da144f72
+MAME "tama"     12288    5c864cb1   4b4979cf92dc9d2fb6d7295a38f209f3da144f72
+```
+
+MAME 0.261's entry (`mame0261.xml`, from the `mame0261lx.zip` distribution):
+
+```
+<machine name="tama" sourcefile="bandai/tamag1.cpp">
+  <description>Tamagotchi (USA)</description>
+  <year>1997</year>
+  <rom name="tama.bin" size="12288" crc="5c864cb1" .../>
+  <chip type="cpu" name="Seiko Epson E0C6S46" clock="32768"/>
+  <display type="lcd" width="32" height="16" refresh="32.000000"/>
+  <driver status="good" emulation="good" savestate="supported"/>
+</machine>
+```
+
+Three things that follow:
+
+- **`emulation="good"`** is MAME's own highest rating for this device, so the
+  hardware behaviour is understood, not guessed at.
+- **refresh is 32 Hz**, not the 30 the front end renders at. Close enough for a
+  desktop reference; worth matching exactly if it ever ships on the watch.
+- **MAME has exactly one Tamagotchi machine.** Of the twelve machines in 0.261
+  that use an E0C6xxx part, only `tama` is a Tamagotchi — the others are
+  Cyberball, Virtua Striker and a few fruit machines using the same CPU as a
+  peripheral. There is no P2, no Angel and no Digimon in MAME, so MAME is not a
+  source of ROMs for the other seven devices.
+
+### What is on this machine
+
+A scan of every 12,288-byte file under both mounts found **one** recognised
+device ROM: the P1 above. No P2, Angel, Morino or Digimon dump is present, which
+is why only the P1 could be verified.
+
+If other dumps are wanted later, the reference projects catalogue these:
+
+```
+digimon_v1.bin  sha256 eac3c98bf623cfcfb751b165e0707de4...   (Digimon disassembly)
+digimon_v2.bin  sha256 9a8458c11c66d3e71a7b94bc426eb791...   (Digimon disassembly)
+```
+
 ## Keys
 
 ```
