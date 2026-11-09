@@ -5,7 +5,9 @@ Asked and answered on 2026-11-09.
 
 ## Verdict
 
-**Passes, conditionally.** The display path is not a hardware wall — it is a
+**Passes, conditionally** — and the range is wider than first written; see
+*A constraint I found late* below, which narrows 61–98 fps to **38–61 fps** at
+3× with 20 % dirty rectangles. The display path is not a hardware wall — it is a
 driver implementation limit that is already documented by the agent who owns
 that code, and it has roughly **7–13× of headroom** available.
 
@@ -96,6 +98,47 @@ rather than a typical figure.
 Read against the ESP32-S3 at an assumed 150–200 host cycles per emulated
 instruction (240 MHz ÷ 200 … 150 = 1.2–1.6 M steps/sec), that is
 **2.4–3.2× realtime for this ROM**. The CPU side is not the problem.
+
+## A constraint I found late, and it matters
+
+`final/co5300.c` carries a warning that changes the dirty-rectangle assumption:
+
+```c
+/*
+ * 45x356 one op, right strip   torn
+ * 45x2   per op, right strip   clean
+ * ...
+ * The ROOT CAUSE IS NOT ESTABLISHED. This is a workaround that has held every
+ * time it was tried, not an explanation.
+ */
+#define CO5300_RECT_ROWS_PER_BAND	2
+```
+
+**Large single transfers tear.** The rect path is therefore capped at 2 rows
+per transfer, and `panel-api.md` notes rectangles are split into row bands
+regardless because CS edges end the burst. So a dirty rectangle is not one
+transfer — a 288x192 region is **96 transfers of 2 rows each**.
+
+That does not invalidate the estimate, but it widens it, because per-transfer
+fixed cost (CS assert/release, address-window setup, completion poll) now
+applies 96 times rather than once:
+
+| Fixed cost per transfer | 3x full frame | 3x 20 % dirty |
+|---|---|---|
+| 0 µs (bytes dominate) | 82 ms / 12 fps | 16 ms / **61 fps** |
+| 100 µs | 92 ms / 11 fps | 18 ms / **55 fps** |
+| 250 µs | 106 ms / 9 fps | 21 ms / **47 fps** |
+| 500 µs | 130 ms / 8 fps | 26 ms / **38 fps** |
+
+Even at an implausible 500 µs of fixed cost per transfer, 20 % dirty rectangles
+still give **38 fps**, which is enough. So the verdict survives the constraint —
+but the honest range is **38–61 fps**, not the 61–98 fps stated above, and the
+per-transfer cost has never been measured.
+
+And the tearing itself is an unresolved bug, not a documented hardware limit.
+The comment records that the same signature appears in the reference firmware at
+45 MHz and vanishes at 20 MHz, with SPI clock as the suspected cause. If that is
+root-caused, the 2-row cap can go, and everything on this page improves.
 
 ## What this means for the port
 
