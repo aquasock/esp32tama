@@ -157,9 +157,24 @@ at the right rate.
 The firmware now reaches its main loop at `$CE3C`/`$CE66` and cycles it, rather
 than spinning in the boot wait or crashing.
 
-**No picture yet.** Display RAM `$1000-$11FF` is written once and then frozen,
-and the contents are LCD test patterns (`$55`, `$AA`, `$FF`, `$88`) rather than
-a scene. Two candidates: the ROM is running an LCD self-test that never
-completes, or the display layout is not the assumed 64x32 one-bit-per-dot
-bitmap. Next step is to instrument the display writes and find the routine that
-fills `$1000`.
+**No picture yet.** Display RAM is written exactly once and then frozen. The
+write trace attributes every byte:
+
+- **512 bytes** cleared at `$CC9A` — a memset loop filling `$1000-$11FF` with
+  `$00` before the timers are programmed at `$CCA3`.
+- **372 bytes** blitted at `$F081`, inside `$F050` — 12 bytes per row across 31
+  rows, driven by two pointer tables at `$F0FE` and `$F13C`.
+- **3 bytes** from `$F0E7`/`$F0ED`/`$F0F3`.
+
+After that, nothing. `$F050` is gated on RAM `$2F`: it blits only when `$2F` is
+non-zero with bit 7 clear, and otherwise falls to `$F0F9`, which just clears
+`$2F` and returns. The ROM therefore believes the screen is current and calls
+it once per frame purely to check.
+
+Two things follow. The 12-bytes-per-row, 31-row geometry does not match a
+64x32 one-bit-per-dot panel, so the display layout assumed so far is wrong —
+next step is to decode `$F0FE`/`$F13C` as address tables and see what region
+`$F050` is really copying into. And the sparse `$55`/`$AA`/`$FF`/`$88` content
+suggests this single blit is an LCD initialisation pattern rather than a
+rendered scene, so the scene that follows is waiting on something — most likely
+the RTC, since the V3 also asks for the clock to be set before it draws a pet.

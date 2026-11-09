@@ -234,12 +234,22 @@ static inline uint8_t read8(gplb *c, uint32_t addr)
     return 0;   /* $0600-$3FFF is unmapped */
 }
 
+/* Display-RAM write trace. Under gplb_io_trace this prints the first 100k
+ * writes with the program counter, which is how the display routines get
+ * attributed: the boot clear is $CC9A (512 bytes of $1000-$11FF), the blit is
+ * $F050 -> $F081 (12 bytes x 31 rows). */
+static unsigned long gplb_dpwr = 0;
+
 static inline void write8(gplb *c, uint32_t addr, uint8_t v)
 {
     addr &= 0xFFFF;
     if (addr < GPLB_RAM_SIZE) { c->ram[addr] = v; return; }
     if (addr >= GPLB_DPRAM_BASE && addr < GPLB_DPRAM_BASE + GPLB_DPRAM_SIZE) {
-        c->dpram[addr - GPLB_DPRAM_BASE] = v; return;
+        gplb_dpwr++;
+        if (gplb_io_trace && gplb_dpwr < 100000)
+            fprintf(stderr, "DP %04X <- %02X (pc=%04X)\n", addr, v, c->pc);
+        c->dpram[addr - GPLB_DPRAM_BASE] = v;
+        return;
     }
     if (addr >= GPLB_IO_BASE && addr < GPLB_IO_BASE + GPLB_IO_SIZE) {
         c->io[addr - GPLB_IO_BASE] = v;
