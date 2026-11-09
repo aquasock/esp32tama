@@ -92,3 +92,9 @@ Both `pokemini_bench` and `pmgui` now reset after loading.
   (`LCDPixelsA`) for the original's fading dots; the front end draws
   `LCDPixelsD` as crisp black on white. Good for a reference, not faithful to
   the panel's grey.
+
+  Measured, so nobody later mistakes it for a bug: `LCDPixelsD` is strictly
+  binary — the histogram over a Pinball title screen is `0: 1935, 1: 4209` and
+  nothing else. `LCDPixelsA` carries 4 distinct intensities. So the heavy
+  checkerboard in the title art is the game's own spatial dithering, not a
+  decoding fault, and drawing it one bit per dot is correct.
