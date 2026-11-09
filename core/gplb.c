@@ -69,9 +69,17 @@ static inline void set_ps(gplb *c, uint8_t ps)
 /* ---- IO --------------------------------------------------------------- */
 #define IO_ROM_BANK 0x0001   /* placeholder: bank register not yet located */
 
+/* IO write trace, for working out register semantics from the firmware. */
+#include <stdio.h>
+int gplb_io_trace = 0;
+static unsigned long gplb_io_writes = 0;
+
 static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
 {
-    (void)c; (void)idx; (void)v;
+    (void)c;
+    gplb_io_writes++;
+    if (gplb_io_trace && gplb_io_writes < 400)
+        fprintf(stderr, "IO %04X <- %02X\n", 0x3000 + idx, v);
 }
 
 static inline uint8_t read8(gplb *c, uint32_t addr)
