@@ -73,7 +73,15 @@ static inline void set_ps(gplb *c, uint8_t ps)
 }
 
 /* ---- IO --------------------------------------------------------------- */
-#define IO_ROM_BANK 0x0001   /* placeholder: bank register not yet located */
+/* $3000 is the ROM bank register. Established from the firmware: $D294 loads
+ * the bank number from zero page $28, stores it to $3000, then jumps into the
+ * banked window ($D296 STA $3000, $D29B JSR $D2A9 -> JMP ($0026) -> $B383).
+ *
+ * The datasheet names $4000-$7FFF "(Bank)L" and $8000-$BFFF "(Bank)H", which
+ * reads like two registers. The firmware treats them as two halves of one
+ * 32 KB bank: bank 3 addressed at $B383 resolves to offset 0x7383 in bank 3.
+ */
+#define IO_ROM_BANK 0x0000   /* $3000 */
 
 /* IO write trace, for working out register semantics from the firmware. */
 #include <stdio.h>
@@ -82,10 +90,15 @@ static unsigned long gplb_io_writes = 0;
 
 static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
 {
-    (void)c;
     gplb_io_writes++;
     if (gplb_io_trace && gplb_io_writes < 400)
         fprintf(stderr, "IO %04X <- %02X\n", 0x3000 + idx, v);
+
+    if (idx == IO_ROM_BANK) {
+        uint32_t bank = (uint32_t)v * 0x8000u;
+        if (0x4000u + bank < c->rom_len)
+            c->rom_bank = bank;
+    }
 }
 
 #ifdef GPLB_FLAT_RAM
@@ -115,9 +128,15 @@ static inline uint8_t read8(gplb *c, uint32_t addr)
         return c->io[addr - GPLB_IO_BASE];
     if (addr >= GPLB_ROM_FIXED)
         return c->rom[addr & 0x3FFF];
+    /* ROM image layout: [0x0000:0x4000] fixed 16 KB bank, then 32 KB bank
+     * windows from 0x4000. A CPU address in $4000-$BFFF therefore indexes the
+     * image at addr + rom_bank directly -- subtracting the window base as well
+     * reads 16 KB too low, which silently returns the fixed bank instead of
+     * the selected one. That mistake made the firmware execute garbage and
+     * wreck its stack at instruction ~238,000. */
     if (addr >= GPLB_ROM_WIN_LO)
-        return c->rom[((addr - GPLB_ROM_WIN_LO) & 0x7FFF) + c->rom_bank];
-    return c->rom[addr];
+        return c->rom[addr + c->rom_bank];
+    return 0;   /* $0600-$3FFF is unmapped */
 }
 
 static inline void write8(gplb *c, uint32_t addr, uint8_t v)
