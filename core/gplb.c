@@ -55,7 +55,13 @@ struct gplb {
 /* ---- flags ------------------------------------------------------------ */
 static inline uint8_t get_ps(const gplb *c)
 {
-    return (uint8_t)((c->nf << 7) | (c->vf << 6) | (c->bf << 4) |
+    /* Bits 4 and 5 both read as 1 in the pushed status byte on a real 6502.
+     * Bit 5 is a constant, not a flag. Bit 4 is the B flag, and whilst it is
+     * only meaningful for BRK/IRQ, PHP always pushes it set.
+     *
+     * Leaving either clear fails Klaus Dormann's functional test: $063D wants
+     * $FF with all flags set, $0674 wants $30 with all flags clear. */
+    return (uint8_t)(0x30 | (c->nf << 7) | (c->vf << 6) |
                      (c->df << 3) | (c->if_ << 2) | (c->zf << 1) | c->cf);
 }
 
@@ -82,6 +88,23 @@ static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
         fprintf(stderr, "IO %04X <- %02X\n", 0x3000 + idx, v);
 }
 
+#ifdef GPLB_FLAT_RAM
+/* Test-only: a flat 64 KB RAM, so a conformance suite can be loaded whole.
+ * This validates the CPU in isolation from the memory map. */
+uint8_t gplb_flat[0x10000];
+
+static inline uint8_t read8(gplb *c, uint32_t addr)
+{
+    (void)c;
+    return gplb_flat[addr & 0xFFFF];
+}
+
+static inline void write8(gplb *c, uint32_t addr, uint8_t v)
+{
+    (void)c;
+    gplb_flat[addr & 0xFFFF] = v;
+}
+#else
 static inline uint8_t read8(gplb *c, uint32_t addr)
 {
     addr &= 0xFFFF;
@@ -109,6 +132,7 @@ static inline void write8(gplb *c, uint32_t addr, uint8_t v)
         io_write_side_effects(c, (uint16_t)(addr - GPLB_IO_BASE), v);
     }
 }
+#endif /* GPLB_FLAT_RAM */
 
 /* ---- ALU -------------------------------------------------------------- */
 static inline void do_ora(gplb *c, uint8_t v) { c->a |= v; c->nf = (c->a >> 7) & 1; c->zf = (c->a == 0); }
@@ -170,20 +194,20 @@ static inline uint8_t do_rol(gplb *c, uint8_t v)
     return v;
 }
 
-/* ROR, matching the reference exactly.
+/* ROR -- standard 6502: the result is (v >> 1) with the old carry into bit 7,
+ * CF takes v bit 0, N and Z come from the RESULT.
  *
- * The reference computes the zero flag as `not(prev & 0xFE | CF)` -- the OLD
- * value's upper bits, not the rotated result. That is a bug, but it is what the
- * ROM was timed against, so it is reproduced. The negative flag is set from the
- * old carry, which is genuinely correct (it becomes bit 7 of the result).
- */
+ * The SPLB32 core this was derived from had the reference emulator's bug here
+ * (Z computed from the old value, N from the old carry). That had to be
+ * reproduced for the V3 because the ROM was timed against it; the GPLB is a
+ * standard 6502 and Klaus Dormann's test fails at $283D without this. */
 static inline uint8_t do_ror(gplb *c, uint8_t v)
 {
-    uint8_t old_cf = c->cf;
-    uint8_t result = (uint8_t)((v >> 1) | (old_cf << 7));
-    c->nf = old_cf;
-    c->zf = (((v & 0xFE) | old_cf) == 0);
+    uint8_t carry_in = c->cf;
+    uint8_t result = (uint8_t)((v >> 1) | (carry_in << 7));
     c->cf = v & 1;
+    c->nf = (result >> 7) & 1;
+    c->zf = (result == 0);
     return result;
 }
 
@@ -315,7 +339,15 @@ static void exec_op_sem(gplb *c, uint8_t op)
 
     switch (op) {
     /* ---- BRK / stack ---- */
-    case 0x00: c->bf = 1; do_irq(c); return;
+    case 0x00:
+        /* BRK is two bytes: the opcode and a padding byte. The address pushed
+         * is that of the padding byte's successor, so PC must advance once more
+         * before the interrupt pushes it. Klaus Dormann's test checks this at
+         * $37D5/$37DC by reading the pushed address back off the stack. */
+        c->pc = (uint16_t)((c->pc + 1) & 0xFFFF);
+        c->bf = 1;
+        do_irq(c);
+        return;
     case 0x40: c->sp = (uint8_t)((c->sp + 1) & 0xFF); set_ps(c, read8(c, SP_PAGE | c->sp));
                c->sp = (uint8_t)((c->sp + 1) & 0xFF); c->pc = read8(c, SP_PAGE | c->sp);
                c->sp = (uint8_t)((c->sp + 1) & 0xFF);
@@ -478,13 +510,11 @@ load_tail:
     case 0x6A: c->a = do_ror(c, c->a); return;
     case 0x66: ad = am_zp(c); write8(c, ad, do_ror(c, read8(c, ad))); return;
     case 0x76:
-        /* Reference quirk: _ror_zp_x advances PC by 2, not 1. Every other
-         * zp,X instruction advances by 1. Reproduced deliberately so that
-         * the core stays bit-exact with the implementation the ROM was
-         * timed against. See VALIDATION.md. */
+        /* Standard 6502: ROR zp,X advances PC by 1 like every other zp,X.
+         * The SPLB32 core this came from reproduced a reference-emulator bug
+         * that advanced by 2; that was right for the V3 and is wrong here. */
         ad = am_zpx(c);
         write8(c, ad, do_ror(c, read8(c, ad)));
-        c->pc = (uint16_t)((c->pc + 1) & 0xFFFF);
         return;
     case 0x6E: ad = am_abs(c); write8(c, ad, do_ror(c, read8(c, ad))); return;
     case 0x7E: ad = am_absx(c); write8(c, ad, do_ror(c, read8(c, ad))); return;
@@ -644,3 +674,6 @@ void gplb_snapshot(const gplb *c, gplb_state *s)
 const uint8_t *gplb_dpram(const gplb *c) { return c->dpram; }
 uint8_t *gplb_io_regs(gplb *c) { return c->io; }
 uint8_t gplb_peek(gplb *c, uint32_t addr) { return read8(c, addr); }
+
+/* Test hook: jump the core to an address without touching memory. */
+void gplb_force_pc(gplb *c, uint16_t pc) { c->pc = pc; }
