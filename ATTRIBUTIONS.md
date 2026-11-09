@@ -107,3 +107,22 @@ as benchmark inputs. Both are GPL-3.0.
 This repository is GPL-3.0, so vendoring GPL-3.0 code into it is licence
 compatible. No relicensing offer is made for `core/pokemini/` — that code is
 not ours to relicense.
+
+## TamaLib (Tamagotchi P1/P2 core)
+
+`core/tamalib/` is vendored from **TamaLib** by Jean-Christophe Rona.
+
+- Project: <https://github.com/jcrona/tamalib>
+- Revision: `ce304d55f9a73c60232ce3f552e7983db3fa399c`
+- Licence: **GPL-2.0-or-later**, full text at `core/tamalib/LICENSE`
+- Copyright (C) 2021 Jean-Christophe Rona <jc@rona.fr>
+
+Every file in that directory is copied verbatim. `core/hal_types.h` is generated
+from upstream's `hal_types.h.template`; it lives in `core/` because `hal.h`
+includes `"../hal_types.h"`.
+
+TamaLib is GPL-2.0 with the "or (at your option) any later version" clause, so
+it may be used here under GPL-3.0. No relicensing offer is made for
+`core/tamalib/` — that code is not ours to relicense.
+
+No ROM is distributed. The operator supplies their own P1/P2 dump.
