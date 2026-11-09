@@ -1,4 +1,4 @@
-# tinytama
+# esp32tama
 
 A bit-exact emulator for the **Sunplus SPLB32**, the microcontroller in the
 Tamagotchi Connection V3 (2006), written in portable C11.
