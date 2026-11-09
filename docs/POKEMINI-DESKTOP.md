@@ -6,13 +6,25 @@ machine first, then carry it across.
 
 ## Status
 
-**Working.** Real retail cartridges boot and play. Verified by eye on a desktop
-with the actual BIOS and nine cartridges: Pokémon Pinball, Tetris, Puzzle
-Collection, Zany Cards, Lunch Time, and the Party Mini variants.
+**Playable.** Confirmed by the operator, in play, on 2026-11-09: Pokémon Pinball
+started, the clock was set, and **two levels were cleared**. That is the only
+test that covers the whole chain at once — BIOS handover, cartridge execution,
+PRC rendering, display refresh and input — and it passed.
 
-PKM Pinball screenshot check: bumpers, ball and score display render, and the
-frame changes over time (three distinct frame hashes at 300 / 900 / 1800
-emulated frames), so it is running rather than holding a static image.
+Before that, verified on a desktop with the actual BIOS and twelve cartridges:
+Pinball, Tetris, Puzzle Collection, Zany Cards, Lunch Time, Party Mini and the
+GameCube variants. All boot and render.
+
+What each automated check covers, so the gaps are obvious:
+
+| Check | What it proves |
+|---|---|
+| `tools/pokemini_keys.c` | every key maps to the right keypad bit |
+| `tools/pokemini_bench.c` | instructions per frame against the 13,889 budget |
+| 12-cartridge frame sweep | no cartridge blanks or hangs after power-on |
+| determinism replay | which button actually changes the screen |
+
+None of those prove playability. Playing it did.
 
 ## Build and run
 
