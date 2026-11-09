@@ -1,0 +1,19 @@
+# Build outputs
+*.o
+*.a
+corebench
+tamafb
+tamagui
+
+# ROM images and machine state are never committed.
+# The firmware is Bandai's copyrighted work.
+rom.bin
+*.bin
+*.eeprom
+*.state
+*.ppm
+rom_embed.*
+
+# Python
+__pycache__/
+*.pyc

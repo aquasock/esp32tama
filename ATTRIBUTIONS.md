@@ -1,0 +1,62 @@
+# Attributions
+
+Not all of this is my work. The parts that are not are listed here, with what
+they contributed.
+
+## BrickEmuPy — the emulator this is a port of
+
+- **Author:** azya (`azya52`, [@OneBitOnePixel](https://x.com/OneBitOnePixel))
+- **Source:** https://github.com/azya52/BrickEmuPy
+- **Licence:** CC0 1.0 (public domain dedication)
+
+The SPLB32 semantics in `core/splb32.c` — instruction behaviour, cycle counts,
+memory map, SFR layout, sleep batching — are a C port of BrickEmuPy's
+`cores/SPLB32.py`. `core/ht24lc08.c`, `core/con_v3_ir.c` and
+`core/splb32_sound.c` are ports of the corresponding files in its `peripherals/`
+and `cores/` directories. The LCD segment map in `frontends/segmap.c` is
+rasterised from BrickEmuPy's `assets/Tamagotchi_v3.svg`.
+
+CC0 imposes no conditions, so this repository is licensed GPL-3.0 as a whole.
+The credit is given because it is owed, not because the licence requires it.
+
+**Three bugs were found in BrickEmuPy during this port and are reproduced
+deliberately**, because the firmware was timed against that implementation. They
+are documented in `docs/BUGS.md`. A correct 6502 core would not run this ROM
+identically.
+
+## The ROM dump
+
+- **Dumped by:** azya, by decapsulating the SPLB32 and reading the mask ROM from
+  die photographs.
+- **Published:** archive.org item `tamagotchi-v3-us-eu`
+
+The ROM itself is Bandai's copyrighted work and is **not** included in this
+repository.
+
+## Hardware reverse engineering — background
+
+- **Natalie Silvanovich** (https://natashenka.ca) — reverse engineering of
+  Tamagotchi hardware, the GeneralPlus factory test program, and the precedent
+  that these devices can be attacked through their own interfaces. Her write-ups
+  shaped the investigation in `docs/findings.md`, though the emulator here is
+  not derived from her code: her `Tamagotchi-Hack` repository targets the
+  Tama-Go (GPLB52320A) and Friends (2013), not the SPLB32.
+
+## Prior art worth knowing
+
+- `jcrona/tamatool` — P1/P2 explorer and emulator
+- `travisgoodspeed/maskromtool` — die-photo bit extraction
+- `zacharesmer/tamagometer` — infrared protocol documentation for the 2024
+  Connection revision
+
+## This repository
+
+Written by aquasock, 2026. The C port, the differential test harness, the
+segment map generator, the front ends and the documentation are original work;
+the behaviour they implement is BrickEmuPy's.
+
+## Assets
+
+`assets/Tamagotchi_v3.svg` is from BrickEmuPy (CC0). It is the source for
+`frontends/segmap.c` and is included so the segment map can be regenerated at a
+different dot size.
