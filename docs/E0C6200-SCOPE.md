@@ -53,12 +53,24 @@ and the addressing modes were extracted.
 The two cores are not shaped alike, and these are the parts that will not carry
 over mechanically.
 
-### 1. A 4-bit CPU, not 8-bit
+### 1. A 4-bit CPU, not 8-bit — less of a problem than it sounds
 
-The E0C6200 is a 4-bit machine: a 4-bit ALU, 4-bit registers, and memory
-organised as 4-bit nibbles. `RAM_SIZE 0x300` is 768 *nibbles*, not bytes.
-Every load, store and arithmetic op needs a nibble-sized type discipline, and a
-naive `uint8_t` port will be wrong in ways that only show up in the flags.
+The machine is 4-bit: 4-bit ALU and registers, memory of 4-bit nibbles.
+`RAM_SIZE 0x300` is 768 *nibbles*, not bytes.
+
+But the arithmetic is the same shape as the SPLB32's, with `0x0F` in place of
+`0xFF`:
+
+```python
+res = a + b
+CF = res > 15
+if DF and res > 9: res += 6; CF = 1
+ZF = res & 0xF == 0
+result = res & 0xF
+```
+
+In C: `uint8_t` holding 0..15, mask with `0x0F`. That is a constant change, not
+new thinking — the port already has this shape.
 
 ### 2. Ten ports, not four
 
@@ -131,9 +143,10 @@ one input path, two cores behind a small vtable.
   testing needs a P1 dump — which is findable, but not included.
 - **The reference has bugs.** The SPLB32 port found three. Expect the same here,
   and expect to reproduce rather than fix them.
-- **This is not a weekend.** The SPLB32 port took a full session with a working
-  test harness already in place. The E0C6200 adds a new display path and a new
-  arithmetic width; call it 1.5-2x the effort.
+- **This is not a weekend**, but it is not bigger than the SPLB32 either.
+  An earlier draft of this document guessed "1.5-2x the effort" on the grounds
+  that 4-bit arithmetic would be genuinely different. Measuring the reference
+  contradicted that — see "Correction" below.
 
 ## Measurement
 
@@ -196,3 +209,62 @@ No P1/P2 ROM is present locally, so nothing beyond the machine layer can be
 verified yet. The instruction port can be written against the reference by
 synthetic ROM (as `optest.py` does for the SPLB32), but end-to-end testing needs
 a real dump.
+
+
+---
+
+# Correction — this is not harder than the SPLB32
+
+An earlier draft said the E0C6200 port would be "1.5-2x the effort" because the
+4-bit arithmetic would be genuinely different. That was a guess, and measuring
+the reference contradicted it.
+
+## What the measurements actually show
+
+**The instruction table is easier, not harder.**
+
+```
+4096 slots -> 108 runs
+run lengths: 256 x11, 64 x9, 16 x32, 4 x27, 1 x22
+```
+
+Eleven handlers each occupy a clean 256-slot block. The table is perfectly
+range-structured, so it generates mechanically as 108 ranges rather than 4096
+literal entries. Compare the SPLB32, where 256 slots meant 256 hand-verified
+cycle counts.
+
+**There are fewer instruction implementations.**
+
+| | SPLB32 | E0C6200 |
+|---|---|---|
+| distinct handlers | 151 | 108 |
+| table slots | 256 | 4096 |
+| table structure | flat, irregular | 108 clean runs |
+
+**The arithmetic is the same shape.**
+
+```python
+res = a + b
+CF = res > 15            # vs > 255 on the SPLB32
+result = res & 0xF       # vs & 0xFF
+```
+
+A constant change. Not new logic.
+
+## Revised ledger
+
+**Easier than the SPLB32 port:** fewer handlers, a better-structured table,
+no memory wall (12 KB against 512 KB), three times the runtime headroom.
+
+**Harder:** 48 I/O registers against 32, eleven ports against four, four timers
+against two. Each of those is the same *model* as its SPLB32 counterpart with
+more instances.
+
+**Genuinely new:** the display path. `.brick` assets need a new input route for
+`gen_segmap.py`. That is the only substantially new piece.
+
+**Revised estimate: comparable to the SPLB32.** What took a full session last
+time was bisecting trace divergences, and that harness is already written,
+proven, and has a negative control.
+
+The risk list above stands. The size multiplier did not.
