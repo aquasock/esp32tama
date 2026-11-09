@@ -171,10 +171,26 @@ non-zero with bit 7 clear, and otherwise falls to `$F0F9`, which just clears
 `$2F` and returns. The ROM therefore believes the screen is current and calls
 it once per frame purely to check.
 
-Two things follow. The 12-bytes-per-row, 31-row geometry does not match a
-64x32 one-bit-per-dot panel, so the display layout assumed so far is wrong —
-next step is to decode `$F0FE`/`$F13C` as address tables and see what region
-`$F050` is really copying into. And the sparse `$55`/`$AA`/`$FF`/`$88` content
-suggests this single blit is an LCD initialisation pattern rather than a
-rendered scene, so the scene that follows is waiting on something — most likely
-the RTC, since the V3 also asks for the clock to be set before it draws a pet.
+Decoding the two tables fixes the geometry. Both are big-endian 16-bit
+pointers, and the source is simply contiguous:
+
+- source `$0400 + 12*i`, 31 rows — a 372-byte framebuffer in plain RAM
+- destination `$100C` upward for rows 0-15, then `$10B4` downward for rows
+  16-30 — the same 372 bytes of LCD RAM, written outward from the middle
+
+**LCD RAM is 512 bytes, not 2048.** The datasheet says so twice ("LCD RAM 512
+bytes", "512 bytes dedicated LCD RAM") and the arithmetic confirms the dot
+format: 512 bytes x 8 bits / 2048 dots = **2 bits per dot**, which is exactly
+the "4 gray levels" the feature list promises. Display RAM is 64 columns x 32
+commons at 2 bits per dot. The earlier assumption of one byte per dot was wrong
+and is what made the memory map look four times too large.
+
+Rendering the source buffer at its native 12-byte pitch (96 bits per row) gives
+something legible: a rectangular frame with corner ticks, a bounded region with
+evenly spaced dashes, and a circle in the lower middle. That is an **LCD test
+pattern**, not a scene — so the firmware is drawing to prove the panel works and
+then stopping.
+
+The scene that should follow is waiting on something. The V3 asks for the clock
+to be set before it draws a pet, and this ROM is no different; the RTC is the
+next peripheral to model.
