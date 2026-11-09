@@ -372,82 +372,98 @@ path and bank 1 executes (86,631 instructions in the window over 30M, against
 `gplb_set_figure(c, contacts)` exposes this: 0 means a figure is attached
 (contacts low), non-zero means they read high. The default is 0.
 
-## What still blocks a picture
+## A public emulator exists, and it found the register map
 
-Two things, both traced exactly. Neither is a CPU, timer, interrupt, blit or
-geometry problem — all five are verified.
+Searching for prior work turned up **asterick/tamago**, a JavaScript Tama-Go
+emulator that ships the BIOS and two figure ROMs, plus a `GPLB5x.txt` notes
+file containing the register map that the public datasheet omits. That file is
+the ground truth this project had been missing.
 
-### 1. `$3008` never reports "ready", so the state machine loops
+It corrects several things this document previously asserted:
 
-`$CF8E` reads `$3008` and sorts on bits 0-1:
+| Register | What it actually is |
+|---|---|
+| `$3011` | Port A direction |
+| `$3012` | Port A data — buttons and cartridge detect |
+| `$3015` | Port B direction |
+| `$3016` | Port B data — **I2C, SPI and IR**, not a timer |
+| `$3070/$3071` | IRQ enables (16 sources, bit `15-i` for source `i`) |
+| `$3073/$3074` | IRQ pending, write-one-to-clear |
+| `$3076` | NMI enables |
 
-```
-CF8E: LDA $3008 / STA $2E
-CF93: AND #$02 / BEQ $CF9A
-CF97: JMP $CFCB                    ; bit 1 set  -> skip the sensor check
-CF9A: LDA $2E / AND #$01 / BNE $CFA3 ; bit 0 set -> sensor check at $CFA3
-CFA0: JMP $CEE2                    ; both clear -> frame-loop top
-```
-
-`$CEE2` is **the top of the frame loop**, not an error path — it programs
-`$3004`, `$3010`/`$3011`, `$3012`, the TIMER1 reload and `$3016`, then falls
-through to `$CF21`. An earlier note here called it a re-initialisation; that was
-wrong.
-
-Execution counts over 8M instructions, with the figure attached:
+The IRQ source order, from the same file:
 
 ```
-$CF8E  681   read $3008
-$CF93  681   test bit 1
-$CF97  681   bit 1 set -> JMP $CFCB
-$CF9A    0   never reached
-$CFA3    0   sensor check never runs
-$CFCB  681   state block
+0 TM0   3 2048  4 8192  5 SPU  6 SPI  7 FP (LCD frame)
+10 TM1  12 TBH  13 TBL
+NMI: LV detect, TM1
 ```
 
-The ROM itself writes `$3008 = $FF` at `$CF57` before reading it, so bit 1 is
-always set and `$CFA3` is never reached. The consequence is that `$24` stays 1
-forever, and the clear block at `$CEA7` — gated on `$22 = $41` **and**
-`$24 = 1` — runs on every pass. That is where the million-plus display writes
-come from: an LCD clear in a loop, not a renderer.
+**`$3016` was never a timer.** It is Port B, and bit 0 is the I2C data line to
+the console's external EEPROM. The poll loop at `$AEB9` that this document
+earlier read as "waiting for a timer to expire" is the firmware **bit-banging
+I2C**. The apparent "one-shot timer" behaviour was an artefact of modelling a
+serial bus as a timer.
 
-Forcing `$3008` bit 1 clear (`$3008 = $01`) does advance the machine: `$24`
-becomes 2 via `$CFBF` (`$3002 = $80`, `JSR $D70B`, `$24 = 2`) and the clear loop
-stops. So `$3008` reads like a **peripheral-driven busy/status flag** that the
-ROM arms by writing `$FF` and then polls — not a latch the ROM can satisfy by
-writing. Without the peripheral, it stays `$FF` and the machine never leaves the
-first state.
+Also confirmed: the 31-entry LCD row order the firmware blits through
+(`$F13C`) matches the reference's `LCD_ORDER` exactly, and the console clock is
+**4 MHz**, not the 6 MHz assumed from the datasheet's typical figure.
 
-No value of `$3008` tried (0, 1, 2, 3, 4, 8, `$80`, `$FF`, with and without a
-figure) produces a drawn frame.
+## What was rebuilt
 
-### 2. Nothing ever sets the blit's dirty bit
+`core/gplb.c` now implements:
 
-`$F050` blits the 372-byte framebuffer at `$0400` into LCD RAM, but only when
-`$2F` is non-zero **and bit 7 is set**:
+- Port A with direction masking, button sense (active low) and cartridge detect
+- Port B with a full 24LC-style I2C EEPROM state machine (START/STOP, device
+  select, two-byte addressing, read/write, ACK/NACK)
+- The interrupt controller driven by named sources (TM1 = IRQ 10 plus NMI 6,
+  TBL = IRQ 13) instead of an invented timer
+- 4 MHz base clock
+
+**Differential check against the reference.** Running both cores on the same
+ROM with the same driving schedule, at 2,000,000 instructions:
 
 ```
-F050: LDA $2F / BNE $F057
-F054: JMP $F0F9                     ; $2F == 0 -> clear and return
-F057: AND #$80 / BEQ $F0F9          ; bit 7 clear -> clear and return
-F05E: ...blit...
+reference  pc=0xAE92  bank=0x18000  $3012=$1F  $3016=$05
+ours       pc=0xAE92  bank=0x18000  $3012=$1F  $3016=$05
 ```
 
-Watching `$2F` over 12M instructions with the figure attached and `$3008 = $01`
-gives exactly four changes, all `$00 <-> $01` at `$E45E` (which does `ORA #$01`)
-and `$F0FB` (which clears it). Bit 7 is never set.
+Identical. At 12M instructions the LCD RAM content agrees in 480 of 512 bytes,
+and both show only the boot diagnostic pattern.
 
-The three routines that would set it do `LDA $2F / ORA #$80 / STA $2F` at
-`$E330`, `$E4C4` and `$E666` — and none of them has a single direct `JSR`, `JMP`
-or 16-bit table reference anywhere in the image. (The `$6D85` hits are the
-`STA $6D` instruction, not a pointer.) They are unreachable by static reference,
-so they must be selected by a computed dispatch — most likely the RTS-trick, which
-static analysis cannot follow.
+## The conclusion that matters
 
-That is the honest wall: the remaining work needs either GeneralPlus'
-programming manual for `$3008`/`$3060`-`$3065`, or a logic-analyser capture from
-a real Tama-Go, or the figure's own protocol. It is not inferable from the ROM
-alone with confidence, and guessing at it would be inventing facts.
+**Neither emulator draws a pet.** The reference implementation, written by
+someone with the real hardware, gets no further than this one does without a
+figure attached: `$22` stays 0, `$2F` never sets, and the screen holds the boot
+pattern. Its author's own source comments mark the LCD refresh as a "HACK".
+
+So the Tama-Go's playable path genuinely requires a **figure cartridge** — a
+separate chip the console handshakes with over SPI — and that chip's contents
+are not part of the console ROM dump. The two figure ROMs the reference ships
+(524 KB each) are data, and its SPI handling is a stub.
+
+## Bugs found in the reference implementation
+
+Two, both in `eeprom.js`, worth reporting upstream:
+
+1. **Read path never returns real data.** It computes
+   `(data[address] << bits_tx) & 0x80` on a JavaScript number, without
+   truncating to 8 bits first. For `bits_tx` of 2 or more, the shifted bit has
+   already left the 8-bit range, so bits 2-7 of every byte read back as 0.
+   Our port truncates with a `uint8_t` cast and is correct.
+2. **Localstorage save is `typeof`-unsafe**: `window.localStorage` is accessed
+   unguarded in a constructor, so the module cannot be loaded headless without
+   stubbing a global.
+
+## What this cost, and what it bought
+
+The peripheral model is now grounded in documentation rather than inference,
+and the 6502 core, interrupt controller, both ports, the EEPROM, `tools/disasm.py`
+and `tamago_check.c` all carry over to any other 6502-family work. The display
+geometry is verified against the firmware's own blit.
+
+None of that produces a playable Tama-Go, because the figure is required.
 
 ## Tooling
 

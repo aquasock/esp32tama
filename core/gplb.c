@@ -43,23 +43,37 @@ struct gplb {
     uint8_t  a, x, y, sp;
     uint8_t  nf, vf, bf, df, if_, zf, cf;
 
-    /* Interrupts are 16 vectors at $FFC0-$FFDF. $3076 enables vectors 5-11
-     * (bit 7 = global); $3073/$3074 acknowledge them; the ROM writes one bit
-     * per source it services. See the mapping note above io_write_side_effects. */
-    uint16_t irq_enabled;        /* one bit per vector */
-    uint16_t irq_pending;
-    uint8_t  irq_global;
-
-    /* TIMER1. The datasheet lists TIMER1 among the NMI sources, and the ROM's
-     * NMI handler ($D26B) is the only code that sets $01A7=$80 - the flag the
-     * main loop spins on. So the game tick is TIMER1 underflow -> NMI. */
-    uint32_t t1_reload, t1_count;
-    uint32_t t1_prescale;        /* CPU cycles per timer tick */
-    uint32_t t1_acc;             /* cycles accumulated toward the next tick */
-    uint8_t  t1_running;         /* one-shot busy; mirrors $3016 bit 0 */
-    uint8_t  figure;             /* figure-connector contacts, $3012 bits 0-2 */
+    /* Interrupt block. $3070/$3071 are enables, $3073/$3074 are pending flags
+     * (a write clears the bits written), $3076 enables NMI. A pending flag is
+     * a single bit in the 16-bit word ($3073 << 8) | $3074, and the handler
+     * vector for source i is entry i of the $FFC0 table - see irq_vec(). */
     uint8_t  nmi_pending;
     uint64_t nmi_count, irq_count;
+
+    /* Port A. $3011 direction, $3012 data latch. Pinout, from the GPLB notes
+     * shipped with the asterick/tamago reference implementation:
+     *   0 A(Btn)  1 B(Btn)  2 C(Btn)  3 Reset  4 SPI Power
+     *   5 Cart CD1   6 Cart CD2   7 IR Rx
+     * Buttons are active low: a set bit means released. */
+    uint8_t  keys;               /* button sense, bits 0-3 */
+    uint8_t  figure;             /* cartridge-detect sense, 2 bits -> CD1/CD2 */
+
+    /* Port B. $3015 direction, $3016 data latch. Pinout:
+     *   0 I2C data  1 I2C clk  2 EEPROM power  3 IR Tx
+     *   4 SPI_CSN   5 SPI_CLK  6 SPI_TX        7 SPI_RX
+     * The console talks to its 24LC-style EEPROM by bit-banging I2C here, so
+     * these are not timer registers: earlier versions of this file modelled
+     * them as TIMER1 and were wrong. */
+    struct {
+        uint8_t  state, output, last_clk, last_data, last_pow;
+        uint8_t  bits_tx, read, addressbyte;
+        uint16_t address;
+    } ee;
+
+    /* Nominal timer sources. The programming manual that documents the real
+     * prescalers is not public, so these fire at plausible rates: TM1 at the
+     * LCD frame rate, TBL at its fastest documented 16 Hz. */
+    uint32_t tm1_acc, tbl_acc;
     uint8_t  page_crossed;   /* set by abs,X / abs,Y / (zp),Y addressing */
     uint8_t  branch_taken;   /* set by the branch instructions */
 
@@ -98,50 +112,181 @@ static inline void set_ps(gplb *c, uint8_t ps)
  * 32 KB bank: bank 3 addressed at $B383 resolves to offset 0x7383 in bank 3.
  */
 #define IO_ROM_BANK 0x0000   /* $3000 */
-#define IO_IRQ_ACK_LO 0x0073 /* $3073 - ack vectors 0-7,  bit 7-v */
-#define IO_IRQ_ACK_HI 0x0074 /* $3074 - ack vectors 8-15, bit 15-v */
-#define IO_IRQ_ENBL 0x0076   /* $3076 - bit 7 global, bits 0-6 per vector */
-#define IO_IRQ_ENBH 0x0077   /* $3077 - second enable byte */
-/* TIMER1 reload. The ROM writes the high byte first and the low byte second
- * ($3015 then $3014), so $3014 is the high half. Reading them the other way
- * round makes the counter ~32000 instead of 382 and the frame tick drops to
- * 1.5 Hz. */
-#define IO_T1_HI    0x0014   /* $3014 - TIMER1 reload, high byte */
-#define IO_T1_LO    0x0015   /* $3015 - TIMER1 reload, low byte */
-/* $3016 is the TIMER1 control register. Bit 0 starts a one-shot run and the
- * hardware clears it again on expiry - that is what the poll loop at $AEB9
- * is waiting for (DEX/BEQ 256 iterations, then LDA $3016 / AND #$01 / BNE).
- * Bits 1 and 2 are also driven from the shadow copy in RAM $21. */
-#define IO_T1_CTRL  0x0016
+#define IO_PORTA_DIR   0x0011   /* $3011 */
+#define IO_PORTA_DATA  0x0012   /* $3012 - buttons + cartridge detect */
+#define IO_PORTB_DIR   0x0015   /* $3015 */
+#define IO_PORTB_DATA  0x0016   /* $3016 - I2C / SPI / IR */
 
-/* $3012 is a port. Bits 0-2 are the three figure-connector contacts and read
- * back as INPUTS, not as the value written; the ROM writes $1F to set the
- * pull-ups and then reads the lines. Bits 3-7 behave as an output latch (bits
- * 5-6 are debounced by the frame routine at $ED05).
- *
- * Evidence that bits 0-2 are inputs: $E209 reads them, inverts them, and
- * retries until two reads agree, which is the shape of a contact debounce, and
- * the boot branches on the result at $CCEA. */
-#define IO_SENSE    0x0012   /* $3012 - figure contacts in bits 0-2 */
+#define IO_INT_ENA0    0x0070   /* $3070 - IRQ enable  0-7 */
+#define IO_INT_ENA1    0x0071   /* $3071 - IRQ enable  8-15 */
+#define IO_INT_FLG0    0x0073   /* $3073 - IRQ pending 0-7, write clears */
+#define IO_INT_FLG1    0x0074   /* $3074 - IRQ pending 8-15 */
+#define IO_NMI_ENA     0x0076   /* $3076 - bit 7 global, bit (7-i) NMI i */
+
+/* IRQ source numbers, per the vector table in the GPLB notes:
+ *   0 TM0  3 2048  4 8192  5 SPU  6 SPI  7 FP(LCD frame)
+ *   10 TM1  12 TBH  13 TBL
+ * Verified against the ROM's own handlers: vector[3] acks $10 (2048),
+ * vector[7] acks $01 (FP), vector[10] acks $20 (TM1), vector[13] acks $04
+ * (TBL). Each handler acks bit 7-(i&7) of $3073/$3074. */
+#define IRQ_FP   7
+#define IRQ_TM1  10
+#define IRQ_TBL  13
+#define NMI_TM1  6
 
 /* IO write trace, for working out register semantics from the firmware. */
 #include <stdio.h>
 int gplb_io_trace = 0;
 static unsigned long gplb_io_writes = 0;
 
+/* ---- 24LC-series I2C EEPROM -------------------------------------------
+ *
+ * The console has no internal save memory: it bit-bangs I2C on Port B pins 0-2
+ * and stores everything in an external EEPROM. This is a faithful port of the
+ * model in the asterick/tamago reference implementation, which is the only
+ * public description of the protocol this firmware uses.
+ *
+ * Bit width 12 gives a 4 KB device with a two-byte address, matching what the
+ * firmware's access pattern implies.
+ */
+#define EE_SIZE      4096
+#define EE_DISABLED  0
+#define EE_COMMAND   1
+#define EE_ADDRESS   2
+#define EE_READ      3
+#define EE_WRITE     4
+
+static uint8_t ee_mem[EE_SIZE];
+
+static void ee_update(gplb *c, int power, int clk, int data)
+{
+    clk  = clk ? 1 : 0;
+    data = data ? 1 : 0;
+
+    int clk_d  = clk  - c->ee.last_clk;
+    int data_d = data - c->ee.last_data;
+
+    c->ee.last_pow  = (uint8_t)power;
+    c->ee.last_clk  = (uint8_t)clk;
+    c->ee.last_data = (uint8_t)data;
+
+    if (!power) {                       /* unpowered: idle, and NACKs */
+        c->ee.state  = EE_DISABLED;
+        c->ee.output = 1;
+        return;
+    }
+    if (!clk_d && !data_d) return;       /* bus idle */
+
+    /* A data edge while the clock is high is a START or STOP. */
+    if (clk && data_d) {
+        if (data_d > 0) {
+            c->ee.state  = EE_DISABLED;  /* STOP */
+            c->ee.output = 0;
+        } else {
+            c->ee.state  = EE_COMMAND;   /* START */
+            c->ee.output = 0;
+            c->ee.bits_tx = 0;
+            c->ee.read = 0;
+        }
+    }
+
+    if (c->ee.state == EE_DISABLED) return;
+
+    if (clk_d > 0) {
+        /* Rising edge: sample the data line. */
+        c->ee.read = (uint8_t)(((c->ee.read << 1) & 0xFF) | (data ? 1 : 0));
+    } else if (clk_d < 0) {
+        /* Falling edge: present the next output bit, or acknowledge. */
+        if (c->ee.bits_tx < 8) {
+            if (c->ee.state == EE_READ) {
+                /* Shift out MSB first. The cast to uint8_t before the mask
+                 * matters: without it bits 2-7 of a byte shifted by more than
+                 * one position fall outside the mask and always read back 0.
+                 * The reference implementation has exactly that bug, which is
+                 * why it never successfully reads EEPROM contents. */
+                uint8_t b = (uint8_t)(ee_mem[c->ee.address & (EE_SIZE - 1)] << c->ee.bits_tx);
+                c->ee.output = (uint8_t)((b & 0x80) ? 1 : 0);
+            }
+            else
+                c->ee.output = 1;
+        } else if (c->ee.bits_tx == 8) {
+            c->ee.output = 0;            /* ACK */
+
+            switch (c->ee.state) {
+            case EE_COMMAND:
+                switch (c->ee.read & 0xF1) {
+                case 0xA0:               /* device select, then write */
+                    c->ee.state = EE_ADDRESS;
+                    c->ee.addressbyte = 0;
+                    c->ee.address = 0;
+                    break;
+                case 0xA1:               /* device select, then read */
+                    c->ee.state = EE_READ;
+                    break;
+                default:
+                    c->ee.output = 1;    /* NACK an unknown command */
+                    break;
+                }
+                break;
+            case EE_ADDRESS:
+                c->ee.address = (uint16_t)((c->ee.address << 8) | c->ee.read);
+                if (++c->ee.addressbyte >= 2) c->ee.state = EE_WRITE;
+                break;
+            case EE_WRITE:
+                ee_mem[c->ee.address & (EE_SIZE - 1)] = c->ee.read;
+                c->ee.address = (uint16_t)((c->ee.address + 1) & (EE_SIZE - 1));
+                break;
+            case EE_READ:
+                c->ee.address = (uint16_t)((c->ee.address + 1) & (EE_SIZE - 1));
+                break;
+            }
+        }
+        c->ee.bits_tx = (uint8_t)((c->ee.bits_tx + 1) % 9);
+    }
+}
+
+/* Drive the EEPROM from the Port B latch. Direction bits clear mean the pin is
+ * an output here (the ROM drives the bus); the reference model derives the
+ * same three signals from ~dir | latch. */
+static void portb_sync(gplb *c)
+{
+    uint8_t mask  = c->io[IO_PORTB_DIR];
+    uint8_t latch = c->io[IO_PORTB_DATA];
+    uint8_t d     = (uint8_t)(~mask | latch);
+    ee_update(c, d & 4, d & 2, d & 1);
+}
+
+/* Port reads. Direction bits set mean output, so a pin reads back its latch;
+ * direction bits clear mean input, so it reads the sense lines. */
+static uint8_t io_read(gplb *c, uint16_t idx)
+{
+    switch (idx) {
+    case IO_PORTA_DATA: {
+        uint8_t mask  = c->io[IO_PORTA_DIR];
+        uint8_t latch = c->io[IO_PORTA_DATA];
+        uint8_t spi_power = (uint8_t)(mask & latch & 0x10);
+        uint8_t input = (uint8_t)((c->keys & 0x0F) |
+                                  ((spi_power ? 0 : c->figure) << 5));
+        return (uint8_t)((mask & latch) | (~mask & input));
+    }
+    case IO_PORTB_DATA: {
+        uint8_t mask  = c->io[IO_PORTB_DIR];
+        uint8_t latch = c->io[IO_PORTB_DATA];
+        uint8_t input = (uint8_t)(c->ee.output & 1);
+        return (uint8_t)((mask & latch) | (~mask & input));
+    }
+    default:
+        return c->io[idx];
+    }
+}
+
 static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
 {
     gplb_io_writes++;
     if (gplb_io_trace && gplb_io_writes < 400)
         fprintf(stderr, "IO %04X <- %02X\n", 0x3000 + idx, v);
-
-    if (gplb_io_trace && idx >= 0x10 && idx <= 0x16)
-        fprintf(stderr, "T1REG cyc=%llu %04X <- %02X (pc=%04X) reload=%u run=%u\n",
-                (unsigned long long)c->cycles, 0x3000 + idx, v, c->pc,
-                c->t1_reload, c->t1_running);
     if (gplb_io_trace && idx >= 0x70 && idx <= 0x77)
-        fprintf(stderr, "IRQREG %04X <- %02X (pc=%04X)\n",
-                0x3000 + idx, v, c->pc);
+        fprintf(stderr, "IRQREG %04X <- %02X (pc=%04X)\n", 0x3000 + idx, v, c->pc);
 
     switch (idx) {
     case IO_ROM_BANK: {
@@ -150,73 +295,19 @@ static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
             c->rom_bank = bank;
         break;
     }
-    case IO_IRQ_ENBL: {
-        /* Write-one-to-set. A zero write leaves the latch alone.
-         *
-         * Plain-write semantics deadlock this firmware: the boot path sets $82
-         * at $7699, then $76BB writes $00, and every later NMI handler
-         * ($D26B/$D271) writes $00 again. With zeros honoured, nothing is ever
-         * enabled, vector 10 never runs, the $2D flag at $CE75 is never set and
-         * the device spins forever in the idle loop - measured: irq=0 over 20M
-         * instructions, display RAM frozen. With the latch, the same run gives
-         * a live main loop (body executes, bank changes 293 times in 4M
-         * instructions) and $2D toggles. So zeros are not a disable here. */
-        if (v == 0) break;
-        c->irq_global = (uint8_t)(v >> 7);
-        c->irq_enabled = 0;
-        for (int b = 0; b < 7; b++)
-            if (v & (1u << b)) {
-                /* The ROM never writes a mask bit for vector 10, yet it waits
-                 * on a flag only that handler sets. Bit 1 of $3076 ($82) must
-                 * therefore select vector 10, so the byte runs downwards. */
-                int vec = 11 - b;
-                if (vec >= 0 && vec <= 15) c->irq_enabled |= (uint16_t)(1u << vec);
-            }
-        if (gplb_io_trace)
-            fprintf(stderr, "  -> enabled=%04X global=%d\n",
-                    c->irq_enabled, c->irq_global);
+    case IO_PORTA_DIR:
+    case IO_PORTA_DATA:
+        break;                       /* plain latches; read path does the work */
+    case IO_PORTB_DIR:
+    case IO_PORTB_DATA:
+        portb_sync(c);
         break;
-    }
-    case IO_IRQ_ENBH: {
-        /* Second enable byte runs the same way for vectors 12-15 is unknown;
-         * the ROM only ever stores a status read here, so treat it as such. */
+    case IO_INT_FLG0:
+    case IO_INT_FLG1:
+        /* Write-one-to-clear, exactly as the ROM's handlers expect: each one
+         * stores the bit for the source it serviced. */
+        c->io[idx] &= (uint8_t)~v;
         break;
-    }
-    case IO_T1_HI:
-    case IO_T1_LO:
-        /* Just a reload latch. Starting is $3016's job: the ROM always writes
-         * the reload first (e.g. $3015=$7E, $3014=$01) and only then writes the
-         * control byte. */
-        c->t1_reload = ((uint32_t)c->io[IO_T1_HI] << 8) | (uint32_t)c->io[IO_T1_LO];
-        break;
-    case IO_T1_CTRL:
-        /* The ROM writes this register constantly as a copy of the RAM shadow
-         * at $21, cycling through $04-$07. Those writes are not start/stop
-         * commands: the cycle continues with the tick alive, so gating the
-         * timer on bit 0 here stops it mid-run and hangs the boot path at
-         * $769C. The real stop is a zero reload - $C318 and $C326 clear
-         * $3014, $3015 and $3016 together to shut the block down.
-         *
-         * Bit 0 is still the poll flag: writing it set arms the run bit that
-         * the loop at $AEB9 waits to clear, and each expiry clears it. */
-        if (v & 0x01) c->io[IO_T1_CTRL] |= 0x01;
-        else          c->io[IO_T1_CTRL] &= (uint8_t)~0x01;
-        if (gplb_io_trace)
-            fprintf(stderr, "  -> t1 start=%d reload=%u\n",
-                    c->t1_running, c->t1_reload);
-        break;
-    case IO_IRQ_ACK_LO:
-    case IO_IRQ_ACK_HI: {
-        int base = (idx == IO_IRQ_ACK_LO) ? 0 : 8;
-        for (int b = 0; b < 8; b++)
-            if (v & (1u << b)) {
-                int vec = base + (7 - b);
-                if (vec >= 0 && vec <= 15) c->irq_pending &= (uint16_t)~(1u << vec);
-            }
-        if (gplb_io_trace) fprintf(stderr, "  -> ack %02X, pending=%04X\n",
-                                   v, c->irq_pending);
-        break;
-    }
     default:
         break;
     }
@@ -261,9 +352,7 @@ static inline uint8_t read8(gplb *c, uint32_t addr)
         if (idx == 0x16) gplb_last_reader = c->pc;
         gplb_last_read_idx = idx;
         gplb_last_read_pc  = c->pc;
-        if (idx == IO_SENSE)
-            return (uint8_t)((c->io[IO_SENSE] & 0xF8) | (c->figure & 0x07));
-        return c->io[idx];
+        return io_read(c, idx);
     }
     if (addr >= GPLB_ROM_FIXED)
         return c->rom[addr & 0x3FFF];
@@ -414,11 +503,11 @@ static void do_nmi(gplb *c)
     c->nmi_count++;
 }
 
-/* Sixteen vectors live at $FFC0-$FFDF, two bytes each; the datasheet only
- * documents the first twelve ($FFC0-$FFEF). The index is the source number:
- * vector[3] acks $10 ($3073 bit 4), vector[7] acks $01 (bit 0), vector[10]
- * acks $20 ($3074 bit 5), vector[13] acks $04 ($3074 bit 2). In general the
- * ack is $3073/3074 bit 7-(v&7), which fixes the order.
+/* Sixteen vectors live at $FFC0-$FFDF, two bytes each, one per IRQ source.
+ * The GPLB notes give the source names and the ROM's own handlers confirm the
+ * order: vector[3] acks $10 (2048), vector[7] acks $01 (FP / LCD frame),
+ * vector[10] acks $20 (TM1) and vector[13] acks $04 (TBL). Each handler acks
+ * bit 7-(i&7) of $3073/$3074, so the ack and the vector agree.
  */
 static void do_irq(gplb *c, int vec)
 {
@@ -435,7 +524,32 @@ static void do_hw_irq(gplb *c)
     enter_interrupt(c, 0xFFFE);
 }
 
+/* Pending flags form one word: ($3073 << 8) | $3074. Bit b of that word maps
+ * to vector entry 15-b, which is why the table is walked from the top. */
+static int pending_vector(uint16_t pending)
+{
+    for (int b = 15; b >= 0; b--)
+        if (pending & (1u << b)) return 15 - b;
+    return -1;
+}
 
+/* Raise IRQ source i. $3070/$3071 mask it: bit (15-i) of (enable<<8) is the
+ * enable for source i, mirroring the pending word layout. */
+static void fire_irq(gplb *c, int i)
+{
+    uint16_t mask = (uint16_t)((c->io[IO_INT_ENA0] << 8) | c->io[IO_INT_ENA1]);
+    if ((uint16_t)(0x8000u >> i) & (uint16_t)~mask) return;
+    c->io[IO_INT_FLG0 + (i >> 3)] |= (uint8_t)(0x80 >> (i & 7));
+}
+
+/* Raise NMI i. $3076 bit 7 is the global enable and bit (7-i) the per-source
+ * enable; both must be set. */
+static void fire_nmi(gplb *c, int i)
+{
+    if ((uint8_t)~c->io[IO_NMI_ENA] & (uint8_t)(0x80 >> i)) return;
+    if (!(c->io[IO_NMI_ENA] & 0x80)) return;
+    c->nmi_pending = 1;
+}
 
 /* ---- addressing modes -------------------------------------------------- */
 static inline uint32_t am_zp(gplb *c)   { return read8(c, (uint32_t)c->pc++); }
@@ -815,28 +929,31 @@ uint32_t gplb_step(gplb *c)
 
     c->cycles += raw;
 
-    /* TIMER1 free-runs while it has a non-zero reload and expires in a burst of
-     * events that the firmware is demonstrably waiting on:
-     *   - the run bit in $3016 clears, which releases the poll loop at $AEB9;
-     *   - NMI fires, and $D26B - reachable only through the NMI vector - is
-     *     the sole setter of $01A7 = $80, the flag the boot path spins on;
-     *   - vector 10 fires, and $D166 is the sole setter of $2D, the flag the
-     *     main loop spins on. */
-    if (c->t1_reload) {
-        c->t1_acc += raw;
-        while (c->t1_acc >= c->t1_prescale) {
-            c->t1_acc -= c->t1_prescale;
-            if (c->t1_count == 0) {
-                /* Auto-reload, and drop the poll flag so the loop at $AEB9
-                 * (which waits for bit 0 to clear) sees one expiry per arming
-                 * while the periodic tick keeps running for the boot path. */
-                c->t1_count = c->t1_reload;
-                c->io[IO_T1_CTRL] &= (uint8_t)~0x01;
-                c->nmi_pending = 1;
-                c->irq_pending |= (uint16_t)(1u << 10);
-            } else {
-                c->t1_count--;
-            }
+    /* Timer sources. TM1 is the game tick: it raises IRQ 10, whose handler
+     * ($D166) is the sole setter of the $2D flag the main loop spins on, and
+     * it also raises NMI 6, whose handler ($D26B) is the sole setter of the
+     * $01A7 = $80 flag the boot path waits for. One event, both waits - which
+     * is exactly the irq10 + nmi6 pair the reference implementation fires.
+     *
+     * TBL raises IRQ 13, whose handler ($D1A3) just increments the $0100 tick
+     * counter, so it is the animation tick.
+     *
+     * The real prescaler values live in the programming manual, which is not
+     * public. These rates are nominal and configurable. */
+    {
+        uint32_t tm1_period = GPLB_CLOCK_HZ / 60u;
+        uint32_t tbl_period = GPLB_CLOCK_HZ / 16u;
+
+        c->tm1_acc += raw;
+        if (c->tm1_acc >= tm1_period) {
+            c->tm1_acc -= tm1_period;
+            fire_irq(c, IRQ_TM1);
+            fire_nmi(c, NMI_TM1);
+        }
+        c->tbl_acc += raw;
+        if (c->tbl_acc >= tbl_period) {
+            c->tbl_acc -= tbl_period;
+            fire_irq(c, IRQ_TBL);
         }
     }
 
@@ -846,10 +963,10 @@ uint32_t gplb_step(gplb *c)
         return raw;
     }
 
-    if (!c->if_ && c->irq_global) {
-        uint16_t pend = (uint16_t)(c->irq_pending & c->irq_enabled);
-        for (int vec = 0; pend && vec < 16; vec++)
-            if (pend & (1u << vec)) { do_irq(c, vec); break; }
+    if (!c->if_) {
+        uint16_t pend = (uint16_t)((c->io[IO_INT_FLG0] << 8) | c->io[IO_INT_FLG1]);
+        int vec = pending_vector(pend);
+        if (vec >= 0) do_irq(c, vec);
     }
 
     return raw;
@@ -891,24 +1008,21 @@ void gplb_reset(gplb *c)
     c->a = c->x = c->y = 0;
     c->sp = 0xFF;
     set_ps(c, 0x24);
-    c->irq_enabled = c->irq_pending = 0;
-    c->irq_global = 0;
     c->instrs = c->cycles = 0;
 
-    /* TIMER1 defaults. The prescaler is the one number the datasheet text we
-     * have does not pin down; 256 CPU cycles per tick puts the ROM's reload of
-     * $017E at ~61 Hz, which matches a 64-common LCD frame. */
-    c->t1_prescale = 256;
-    c->t1_acc = 0;
-    c->t1_running = 0;
-    c->t1_reload = c->t1_count = 0;
+    /* Buttons idle high (released) and no cartridge is detected. Ports start
+     * with every pin as an input, which is what an unpowered console looks
+     * like to the firmware. */
+    c->keys   = 0x0F;
+    c->figure = 0;
+    memset(&c->ee, 0, sizeof(c->ee));
+    c->ee.output = 1;                /* idle bus reads as NACK */
 
-    /* A Tama-Go with a figure clipped on has all three contacts pulled low, so
-     * the lines read 000. With no figure they sit high at 111. See
-     * docs/TAMAGO-STATUS.md for the branch this selects. */
-    c->figure = 0x00;
     c->nmi_pending = 0;
     c->nmi_count = 0;
+    c->irq_count = 0;
+    c->tm1_acc = 0;
+    c->tbl_acc = 0;
 
     /* vectors live in the fixed bank */
     c->pc = (uint16_t)(read8(c, 0xFFFC) | (read8(c, 0xFFFD) << 8));
@@ -923,8 +1037,6 @@ void gplb_snapshot(const gplb *c, gplb_state *s)
     s->cycles = c->cycles;
     s->nmi = c->nmi_count;
     s->irq = c->irq_count;
-    s->t1_reload = c->t1_reload;
-    s->t1_count = c->t1_count;
     s->rom_bank = c->rom_bank;
     memcpy(s->ram, c->ram, sizeof(s->ram));
     memcpy(s->dpram, c->dpram, sizeof(s->dpram));
@@ -941,10 +1053,35 @@ unsigned long gplb_io_reads(gplb *c, int idx)
     return io_read_hits[idx];
 }
 
-/* Figure connector: 0 means all three contacts are low (a figure is attached),
- * a non-zero mask means those lines read high (no figure, or a partial
- * contact). Only 0 selects the gameplay path in the shipped ROM. */
-void gplb_set_figure(gplb *c, uint8_t contacts) { c->figure = contacts & 0x07; }
+/* Buttons, active low: a set bit means released. Bit 0 = A, 1 = B, 2 = C,
+ * 3 = Reset. Pass 0x0F for nothing pressed. */
+
+/* Cartridge detect: the two bits the console reads on Port A pins 5-6 (Cart
+ * CD1/CD2). The firmware treats 0 as "no figure". */
+void gplb_set_keys(gplb *c, uint8_t keys) { c->keys = (uint8_t)(keys & 0x0F); }
+
+/* Test hook: read the emulated EEPROM directly, bypassing the bus. */
+uint8_t gplb_ee_peek(uint32_t addr) { return ee_mem[addr & (EE_SIZE - 1)]; }
+
+void gplb_set_figure(gplb *c, uint8_t detect) { c->figure = (uint8_t)(detect & 0x03); }
+
+/* Test hook: write an address through the normal path, side effects included.
+ * Lets a harness bit-bang a peripheral without executing CPU instructions. */
+void gplb_poke(gplb *c, uint32_t addr, uint8_t v) { write8(c, addr, v); }
 
 /* Test hook: jump the core to an address without touching memory. */
 void gplb_force_pc(gplb *c, uint16_t pc) { c->pc = pc; }
+
+/* The console's LCD is not a flat bitmap: each of the 31 visible rows starts at
+ * a different offset in the 512-byte display RAM, and the rows run outward from
+ * the middle. This is the same order the firmware's own blit table encodes at
+ * $F13C, and it matches the reference implementation's LCD_ORDER exactly.
+ */
+static const uint16_t lcd_order[31] = {
+    0xC0, 0xCC, 0xD8, 0xE4, 0xF0, 0xFC, 0x108, 0x114,
+    0x120, 0x12C, 0x138, 0x144, 0x150, 0x15C, 0x168, 0x174,
+    0xB4, 0xA8, 0x9C, 0x90, 0x84, 0x78, 0x6C, 0x60,
+    0x54, 0x48, 0x3C, 0x30, 0x24, 0x18, 0x0C
+};
+const uint16_t *gplb_lcd_order(void) { return lcd_order; }
+

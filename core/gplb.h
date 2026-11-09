@@ -5,9 +5,9 @@
  * peripherals: 1536 bytes RAM, 320 KB or 640 KB ROM, 6 MHz, a 64x32 dot LCD
  * with 4 grey levels, an 8-channel SPU and two 16-bit timers.
  *
- * CPU, memory map, per-source interrupt vectors, TIMER1 (as an NMI source) and
- * the figure-connector sense lines are implemented. The LCD driver, the SPU and
- * the $3060-$3065 segment-driver registers are not.
+ * CPU, memory map, the interrupt controller, Port A (buttons, cartridge
+ * detect), Port B (I2C EEPROM bit-banging) and the I2C EEPROM itself are
+ * implemented. The SPU, SPI and the segment-driver registers are not.
  */
 
 #ifndef GPLB_H
@@ -16,7 +16,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define GPLB_CLOCK_HZ      6000000u
+#define GPLB_CLOCK_HZ      4000000u
 
 #define GPLB_RAM_BASE      0x0000
 #define GPLB_RAM_SIZE      0x0600     /* 1536 bytes */
@@ -56,11 +56,20 @@ uint64_t gplb_run_instrs(gplb *c, uint64_t n);
 
 void gplb_snapshot(const gplb *c, gplb_state *s);
 
-/* Figure connector state: 0 = figure attached (all three contacts low),
- * non-zero = those lines read high (no figure). Default is 0. */
-void gplb_set_figure(gplb *c, uint8_t contacts);
+/* Buttons, active low (bit set = released). 0 = A, 1 = B, 2 = C, 3 = Reset.
+ * 0x0F is nothing pressed, which is the reset default. */
+void gplb_set_keys(gplb *c, uint8_t keys);
+
+/* Cartridge-detect sense (Port A bits 5-6). 0 is the reset default. */
+void gplb_set_figure(gplb *c, uint8_t detect);
+
+/* The 31-entry LCD row order, in LCD RAM offsets. Row y of the panel starts at
+ * LCD_RAM[order[y]], 16 bytes per row at 2 bits per dot, rows 12 bytes apart. */
+const uint16_t *gplb_lcd_order(void);
 const uint8_t *gplb_dpram(const gplb *c);
 uint8_t *gplb_io_regs(gplb *c);
 uint8_t  gplb_peek(gplb *c, uint32_t addr);
+void     gplb_poke(gplb *c, uint32_t addr, uint8_t v);
+uint8_t  gplb_ee_peek(uint32_t addr);
 
 #endif
