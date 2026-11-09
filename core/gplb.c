@@ -57,6 +57,7 @@ struct gplb {
     uint32_t t1_prescale;        /* CPU cycles per timer tick */
     uint32_t t1_acc;             /* cycles accumulated toward the next tick */
     uint8_t  t1_running;         /* one-shot busy; mirrors $3016 bit 0 */
+    uint8_t  figure;             /* figure-connector contacts, $3012 bits 0-2 */
     uint8_t  nmi_pending;
     uint64_t nmi_count, irq_count;
     uint8_t  page_crossed;   /* set by abs,X / abs,Y / (zp),Y addressing */
@@ -112,6 +113,16 @@ static inline void set_ps(gplb *c, uint8_t ps)
  * is waiting for (DEX/BEQ 256 iterations, then LDA $3016 / AND #$01 / BNE).
  * Bits 1 and 2 are also driven from the shadow copy in RAM $21. */
 #define IO_T1_CTRL  0x0016
+
+/* $3012 is a port. Bits 0-2 are the three figure-connector contacts and read
+ * back as INPUTS, not as the value written; the ROM writes $1F to set the
+ * pull-ups and then reads the lines. Bits 3-7 behave as an output latch (bits
+ * 5-6 are debounced by the frame routine at $ED05).
+ *
+ * Evidence that bits 0-2 are inputs: $E209 reads them, inverts them, and
+ * retries until two reads agree, which is the shape of a contact debounce, and
+ * the boot branches on the result at $CCEA. */
+#define IO_SENSE    0x0012   /* $3012 - figure contacts in bits 0-2 */
 
 /* IO write trace, for working out register semantics from the firmware. */
 #include <stdio.h>
@@ -217,6 +228,10 @@ static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
 static unsigned long io_read_hits[GPLB_IO_SIZE];
 uint16_t gplb_last_reader = 0;
 
+/* Generic IO read attribution, for working out which code polls what. */
+uint16_t gplb_last_read_idx = 0xFFFF;
+uint16_t gplb_last_read_pc  = 0;
+
 #ifdef GPLB_FLAT_RAM
 /* Test-only: a flat 64 KB RAM, so a conformance suite can be loaded whole.
  * This validates the CPU in isolation from the memory map. */
@@ -241,9 +256,14 @@ static inline uint8_t read8(gplb *c, uint32_t addr)
     if (addr >= GPLB_DPRAM_BASE && addr < GPLB_DPRAM_BASE + GPLB_DPRAM_SIZE)
         return c->dpram[addr - GPLB_DPRAM_BASE];
     if (addr >= GPLB_IO_BASE && addr < GPLB_IO_BASE + GPLB_IO_SIZE) {
-        io_read_hits[addr - GPLB_IO_BASE]++;
-        if (addr - GPLB_IO_BASE == 0x16) gplb_last_reader = c->pc;
-        return c->io[addr - GPLB_IO_BASE];
+        uint16_t idx = (uint16_t)(addr - GPLB_IO_BASE);
+        io_read_hits[idx]++;
+        if (idx == 0x16) gplb_last_reader = c->pc;
+        gplb_last_read_idx = idx;
+        gplb_last_read_pc  = c->pc;
+        if (idx == IO_SENSE)
+            return (uint8_t)((c->io[IO_SENSE] & 0xF8) | (c->figure & 0x07));
+        return c->io[idx];
     }
     if (addr >= GPLB_ROM_FIXED)
         return c->rom[addr & 0x3FFF];
@@ -262,7 +282,7 @@ static inline uint8_t read8(gplb *c, uint32_t addr)
  * writes with the program counter, which is how the display routines get
  * attributed: the boot clear is $CC9A (512 bytes of $1000-$11FF), the blit is
  * $F050 -> $F081 (12 bytes x 31 rows). */
-static unsigned long gplb_dpwr = 0;
+unsigned long gplb_dpwr = 0;
 
 static inline void write8(gplb *c, uint32_t addr, uint8_t v)
 {
@@ -882,6 +902,11 @@ void gplb_reset(gplb *c)
     c->t1_acc = 0;
     c->t1_running = 0;
     c->t1_reload = c->t1_count = 0;
+
+    /* A Tama-Go with a figure clipped on has all three contacts pulled low, so
+     * the lines read 000. With no figure they sit high at 111. See
+     * docs/TAMAGO-STATUS.md for the branch this selects. */
+    c->figure = 0x00;
     c->nmi_pending = 0;
     c->nmi_count = 0;
 
@@ -915,6 +940,11 @@ unsigned long gplb_io_reads(gplb *c, int idx)
     if (idx < 0 || idx >= GPLB_IO_SIZE) return 0;
     return io_read_hits[idx];
 }
+
+/* Figure connector: 0 means all three contacts are low (a figure is attached),
+ * a non-zero mask means those lines read high (no figure, or a partial
+ * contact). Only 0 selects the gameplay path in the shipped ROM. */
+void gplb_set_figure(gplb *c, uint8_t contacts) { c->figure = contacts & 0x07; }
 
 /* Test hook: jump the core to an address without touching memory. */
 void gplb_force_pc(gplb *c, uint16_t pc) { c->pc = pc; }

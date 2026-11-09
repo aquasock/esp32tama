@@ -154,11 +154,16 @@ instructions — unchanged by the interrupt work). The memory map is correct for
 what the firmware uses, the interrupt controller is modelled, and the tick runs
 at the right rate.
 
-The firmware now reaches its main loop at `$CE3C`/`$CE66` and cycles it, rather
-than spinning in the boot wait or crashing.
+The firmware reaches its main loop at `$CE3C`/`$CE66` and cycles it rather than
+spinning in the boot wait or crashing, and with the figure connector modelled it
+enters the gameplay path — see *The gate is the figure connector* below.
 
-**No picture yet.** Display RAM is written exactly once and then frozen. The
-write trace attributes every byte:
+**Still no picture.** In the gameplay path the screen is cleared and re-drawn
+2.1M times but never painted, because an undocumented handshake at `$3008`
+never completes.
+
+The boot-time display writes are still worth recording, because they fix the
+geometry. The trace attributes every byte:
 
 - **512 bytes** cleared at `$CC9A` — a memset loop filling `$1000-$11FF` with
   `$00` before the timers are programmed at `$CCA3`.
@@ -207,15 +212,32 @@ sub-rectangle of the panel `$100C` maps to, not as a contradiction.
 
 ## What the firmware actually reads
 
-Only five IO registers are ever read, which narrows the peripherals a long way:
+The read census differs sharply between the two paths, which is itself
+evidence that they are genuinely different code.
+
+Without a figure (the stall path):
 
 ```
 $3000   369       ROM bank, saved and restored around every handler
 $3012   736       figure sensor bits 0-2, and two debounced status bits
 $3016   71243     TIMER1 control - bit 0 polled by the loop at $AEB9
-$3032   1         IR reply byte
-$3033   1         IR reply byte
+$3032   1         unused in this path
+$3033   1
 ```
+
+With a figure (the gameplay path, 30M instructions):
+
+```
+$3000   1039      ROM bank
+$3008   4202      handshake status, bits 0-1 (see below)
+$3012   25731     figure sensor + status
+$3032   1
+$3033   1
+$3060   4203      polled by the loop at $F629 until it goes non-zero
+```
+
+Note `$3016` disappears entirely — TIMER1's control register is a boot-path
+concern only, which confirms it was never a button port.
 
 ## `$3016` is TIMER1's control register, not a button port
 
@@ -299,62 +321,87 @@ contiguous 372-byte block. At 48 dots wide the block renders as a bordered
 panel with vertical rules, a bounded band of evenly spaced dashes, and a circle
 — a diagnostic layout, not a scene.
 
-## Why the screen stops at the diagnostic pattern
+## The gate is the figure connector
 
-The firmware boots, runs a 61 Hz frame loop, and then does very little. The
-chain is now traced end to end, and it is a **state machine gated on one
-byte**.
+The screen used to stop at the boot diagnostic pattern because the emulator
+looked to the ROM like a Tama-Go in an unplayable state. That is now diagnosed
+and modelled.
 
-**The figure sensor is `$3012` bits 0-2.** `$E209` reads them inverted and
-debounced:
+**`$3012` bits 0-2 are the three figure-connector contacts, and they read as
+inputs.** The ROM writes `$1F` to `$3012`, which sets pull-ups on those lines,
+and then reads them back. `$E209` inverts and debounces the reading:
 
 ```
 E209: LDA $3012 / EOR #$07 / AND #$07 / STA $49
-      JSR $D460            ; short delay
+      JSR $D460                    ; short delay
       LDA $3012 / EOR #$07 / AND #$07
-      CMP $49 / BNE $E209  ; retry until two reads agree
-      LDA $49 / RTS
+      CMP $49 / BNE $E209          ; retry until two reads agree
+      LDA $49 / RTS                ; returns ~$3012 & 7
 ```
 
-So it returns `~$3012 & 7`: 7 means all three contacts are low, 0 means all
-three are high. A bare Tama-Go with no figure has the contacts open, so it
-reads 0 — which is what this emulator produces, and therefore already the
-correct default. The Tama-Go *figure* connectors are on those three lines.
+So it returns `~$3012 & 7`: 7 when all three contacts are low, 0 when all three
+are high. A figure clipped on pulls the contacts low, so a real unit with a
+figure reads **000**, and one without reads **111**.
 
-`$58FD` debounces that reading every frame into `$50`/`$51`, with `$FE` used as
-an "uninitialised" sentinel. That part of the model now behaves like real
-hardware.
-
-**The boot branches on the sensor and sets `$40`.** At `$CCE7` the boot path
-calls `$E209`; if it returns 7 the ROM sets `$22 = $41`, otherwise it falls
-into `$CCF5`, which reads `$031F`, masks it with 3, and stores the result in
-`$40`. With no figure attached the second path is taken.
-
-**The per-frame update is gated on `$0310`.** `$ECEF` opens with:
+**The boot branches on it at `$CCE7`, and only 000 proceeds.**
 
 ```
-ECEF: LDA $22 / CMP #$41 / BEQ ...
-      LDA $0310 / CMP #$00 / BNE ...
-      JMP $EE21            ; $EE21 is a bare RTS
+CCE7: JSR $E209
+CCEA: CMP #$07 / BNE $CCF5        ; not all-low -> the "no figure" path
+CCEE: LDA #$41 / STA $22 / JMP $CD94
 ```
 
-So while `$0310` is zero the entire bank-0 frame update — including the
-`$3012` status debounce at `$ED05` — reduces to a `RTS`. Measured over 20M
-instructions: `$0310 = $00`, `$22 = $00`, `$2F = $00`, and display RAM never
-changes again.
+`$22 = $41` selects the gameplay path. `$CD94` is the real game init: `SEI`,
+`JSR $D70B`, then the segment-driver block `$3064 = $80`, `$3060 = $00`,
+`$3062 = $00`, `$3065 = $02`, `$3006 = $01`, and the game state at `$9D`,
+`$97`, `$9C`, `$95`, `$B1`, `$A3`, `$A5`.
 
-**`$0310` is written from `$40` by code that never runs.** The writer is bank 1
-`$6D85` (`LDA $40 / STA $0310 / STA $0311 / ...`). A probe for that address
-over 20M instructions reports `never`. It is not reached by a `JSR` either —
-there is no `20 85 6D` anywhere in the image — so it must be reached through
-the ROM's indirect dispatch (`JMP ($0026)`, `JMP ($0034)`, and the trampoline at
-`$D28B`, which sets the bank from `$28` and jumps through a pointer pair).
-Only banks 1 and 3 execute in a 20M-instruction window, so the handler bank
-holding that entry is never selected.
+**Measured effect of modelling the contacts.** Before, `$0310` was never
+written, `$22` stayed 0, and display RAM never changed again after the boot
+blit (888 writes total). With the contacts low, the ROM enters the gameplay
+path, executes bank 1 heavily (86,631 instructions in the window over 30M,
+against 36,867 before), and display activity rises to **2,152,312** writes.
 
-That is the precise blocker: **the state machine never leaves state 0**, so the
-display is never marked dirty and nothing is ever blitted. It is not a CPU,
-timer, interrupt or blit problem — all four are verified.
+`gplb_set_figure(c, contacts)` exposes this: 0 means a figure is attached
+(contacts low), non-zero means they read high. The default is 0.
+
+## What still blocks a picture
+
+The screen is cleared and redrawn but never painted, and the reason is the next
+handshake down.
+
+`$CF8E` polls `$3008` and selects on bits 0-1:
+
+```
+CF8E: LDA $3008 / STA $2E
+CF93: AND #$02 / BEQ $CF9A
+CF97: JMP $CFCB                    ; bit 1 set
+CF9A: LDA $2E / AND #$01 / BNE $CFA3 ; bit 0 set
+CFA0: JMP $CEE2                    ; both clear
+```
+
+`$CEE2` is a re-initialisation: `$3004 = $55`, `$3060 = 0`, `$3062 = 0`,
+`$3006 = 0`, `$3011 = $10`, `$3010 = $88`, `$3012 = $1F`. With `$3008` reading
+zero the ROM re-runs boot on every pass — that is where the 2.1M display writes
+come from, not from a renderer.
+
+Forcing `$3008` to 0, 1, 2, 3, 4, 8 and `$FF` changes which path is taken
+(bit 1 lands at `$E812`, bit 0 at `$CE66`) but **none of them produces a drawn
+frame**: the peak non-zero LCD content stays at 376 bytes, the boot pattern, in
+every case. So `$3008` is necessary but not sufficient, and there is at least
+one more condition.
+
+The register block involved — `$3006`, `$3008`, `$3060`, `$3062`, `$3064`,
+`$3065` — has no public documentation. `$3060` is itself polled 4,203 times in
+the gameplay path by a loop at `$F629` that re-reads until it goes non-zero. The
+most likely reading is that this is the **figure's communication channel**: a
+Tama-Go figure has a small chip on it, and the console handshakes with it before
+the pet appears. Without the figure's protocol implemented, the handshake never
+completes.
+
+That is the honest blocker: not a CPU, timer, interrupt, blit or geometry
+problem — all five are verified — but an undocumented handshake with a
+peripheral that is not in the dump.
 
 ## Tooling
 

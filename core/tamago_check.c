@@ -16,12 +16,18 @@
  *   2. The destination addresses cover $100C-$117F exactly once, with no
  *      overlap between the ascending and descending halves.
  *   3. TIMER1 reloads and expires at a rate consistent with a 64-common frame.
+ *   4. With a figure attached, the ROM leaves the no-figure stall and enters
+ *      the gameplay path ($22 = $41).
  *
  * Exit status: 0 all checks passed, 1 a check failed.
  */
 #include "gplb.h"
 #include <stdio.h>
 #include <stdlib.h>
+
+/* Declared in gplb.c: counts every write into LCD RAM, so the check can stop
+ * exactly after the boot blit instead of guessing an instruction count. */
+extern unsigned long gplb_dpwr;
 
 #define FIXED_BLOCK   0x00000u     /* ROM image offset of the $C000-$FFFF bank */
 #define TBL_DST       0xF13Cu
@@ -51,8 +57,17 @@ int main(int argc, char **argv)
     gplb *c = gplb_new(rom, (size_t)n);
     if (!c) { fprintf(stderr, "rom too small\n"); return 2; }
 
-    /* Run far enough for the boot path to complete the initial blit. */
-    gplb_run_instrs(c, 4000000);
+    /* Stop as soon as the boot blit has landed rather than at an arbitrary
+     * instruction count: the ROM clears the screen again when it enters the
+     * game path, so a fixed count can sample the blank frame. The boot writes
+     * 512 bytes to clear, then 372 for the blit. */
+    {
+        gplb_state probe;
+        do {
+            gplb_step(c);
+            gplb_snapshot(c, &probe);
+        } while (gplb_dpwr < 512 + ROWS * ROW_BYTES && probe.instrs < 5000000);
+    }
 
     gplb_state s;
     gplb_snapshot(c, &s);
@@ -97,6 +112,23 @@ int main(int argc, char **argv)
     printf("     TIMER1 tick: %.1f Hz (%llu expiries)\n", hz,
            (unsigned long long)(b.nmi - a.nmi));
     check(hz > 50.0 && hz < 75.0, "timer: tick is in the 50-75 Hz frame band");
+
+    /* --- 4. figure attached selects the gameplay path --- */
+    gplb_free(c);
+    c = gplb_new(rom, (size_t)n);
+    gplb_set_figure(c, 0x00);          /* figure clipped on: contacts low */
+    gplb_run_instrs(c, 3000000);
+    gplb_snapshot(c, &s);
+    printf("     with figure: $22=%02X\n", s.ram[0x22]);
+    check(s.ram[0x22] == 0x41, "figure: attached figure selects gameplay ($22=$41)");
+
+    gplb_free(c);
+    c = gplb_new(rom, (size_t)n);
+    gplb_set_figure(c, 0x07);          /* no figure: contacts high */
+    gplb_run_instrs(c, 3000000);
+    gplb_snapshot(c, &s);
+    printf("     no figure:   $22=%02X\n", s.ram[0x22]);
+    check(s.ram[0x22] == 0x00, "figure: no figure stalls before gameplay");
 
     gplb_free(c);
     free(rom);

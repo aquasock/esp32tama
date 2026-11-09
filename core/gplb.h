@@ -5,8 +5,9 @@
  * peripherals: 1536 bytes RAM, 320 KB or 640 KB ROM, 6 MHz, a 64x32 dot LCD
  * with 4 grey levels, an 8-channel SPU and two 16-bit timers.
  *
- * CPU, memory map, per-source interrupt vectors, and TIMER1 (as an NMI source)
- * are implemented. LCD driver and SPU are not.
+ * CPU, memory map, per-source interrupt vectors, TIMER1 (as an NMI source) and
+ * the figure-connector sense lines are implemented. The LCD driver, the SPU and
+ * the $3060-$3065 segment-driver registers are not.
  */
 
 #ifndef GPLB_H
@@ -54,6 +55,10 @@ uint64_t gplb_run_cycles(gplb *c, uint64_t n);
 uint64_t gplb_run_instrs(gplb *c, uint64_t n);
 
 void gplb_snapshot(const gplb *c, gplb_state *s);
+
+/* Figure connector state: 0 = figure attached (all three contacts low),
+ * non-zero = those lines read high (no figure). Default is 0. */
+void gplb_set_figure(gplb *c, uint8_t contacts);
 const uint8_t *gplb_dpram(const gplb *c);
 uint8_t *gplb_io_regs(gplb *c);
 uint8_t  gplb_peek(gplb *c, uint32_t addr);
