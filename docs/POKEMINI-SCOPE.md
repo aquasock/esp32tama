@@ -68,6 +68,11 @@ Extrapolating to the T-Watch Ultra (ESP32-S3, 240 MHz):
 - Frame budget at 72 Hz is 4 MHz ÷ 72 = **55,555 emulated cycles**, about
   13,900 instructions per frame.
 
+A dedicated gate report on the display path is in
+`docs/POKEMINI-DISPLAY-GATE.md`: it passes conditionally, with 61-98 fps
+available at 3x zoom using dirty rectangles on the current driver, and far more
+with DMA.
+
 **This is an estimate, not a measurement.** The decisive evidence is that
 PokeMini runs at playable speed on a **67 MHz ARM9**, which is a quarter of the
 ESP32-S3's clock and a weaker core. That makes full speed very likely, but the
