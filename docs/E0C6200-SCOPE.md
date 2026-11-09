@@ -1,3 +1,9 @@
+> **Superseded in part.** The clock estimate in this document ("1.6 MHz for the
+> P1", "~6-8x realtime") is wrong: the E0C6S46 ticks at **32,768 Hz**. See
+> `E0C6S46-SCOPE.md` for the corrected numbers, the prior-art situation, and the
+> recommendation. This document is kept for the interface analysis and the
+> progress log, which are still accurate.
+
 # E0C6200 port — scope
 
 Decision record for porting BrickEmuPy's Epson E0C6200 core to C, alongside the
