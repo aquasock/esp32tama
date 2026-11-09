@@ -211,7 +211,7 @@ Only five IO registers are ever read, which narrows the peripherals a long way:
 
 ```
 $3000   369       ROM bank, saved and restored around every handler
-$3012   736       read during the timer setup paths
+$3012   736       figure sensor bits 0-2, and two debounced status bits
 $3016   71243     TIMER1 control - bit 0 polled by the loop at $AEB9
 $3032   1         IR reply byte
 $3033   1         IR reply byte
@@ -298,6 +298,77 @@ The geometry the checks confirm: 31 rows of 12 bytes, at 2 bits per dot, in a
 contiguous 372-byte block. At 48 dots wide the block renders as a bordered
 panel with vertical rules, a bounded band of evenly spaced dashes, and a circle
 — a diagnostic layout, not a scene.
+
+## Why the screen stops at the diagnostic pattern
+
+The firmware boots, runs a 61 Hz frame loop, and then does very little. The
+chain is now traced end to end, and it is a **state machine gated on one
+byte**.
+
+**The figure sensor is `$3012` bits 0-2.** `$E209` reads them inverted and
+debounced:
+
+```
+E209: LDA $3012 / EOR #$07 / AND #$07 / STA $49
+      JSR $D460            ; short delay
+      LDA $3012 / EOR #$07 / AND #$07
+      CMP $49 / BNE $E209  ; retry until two reads agree
+      LDA $49 / RTS
+```
+
+So it returns `~$3012 & 7`: 7 means all three contacts are low, 0 means all
+three are high. A bare Tama-Go with no figure has the contacts open, so it
+reads 0 — which is what this emulator produces, and therefore already the
+correct default. The Tama-Go *figure* connectors are on those three lines.
+
+`$58FD` debounces that reading every frame into `$50`/`$51`, with `$FE` used as
+an "uninitialised" sentinel. That part of the model now behaves like real
+hardware.
+
+**The boot branches on the sensor and sets `$40`.** At `$CCE7` the boot path
+calls `$E209`; if it returns 7 the ROM sets `$22 = $41`, otherwise it falls
+into `$CCF5`, which reads `$031F`, masks it with 3, and stores the result in
+`$40`. With no figure attached the second path is taken.
+
+**The per-frame update is gated on `$0310`.** `$ECEF` opens with:
+
+```
+ECEF: LDA $22 / CMP #$41 / BEQ ...
+      LDA $0310 / CMP #$00 / BNE ...
+      JMP $EE21            ; $EE21 is a bare RTS
+```
+
+So while `$0310` is zero the entire bank-0 frame update — including the
+`$3012` status debounce at `$ED05` — reduces to a `RTS`. Measured over 20M
+instructions: `$0310 = $00`, `$22 = $00`, `$2F = $00`, and display RAM never
+changes again.
+
+**`$0310` is written from `$40` by code that never runs.** The writer is bank 1
+`$6D85` (`LDA $40 / STA $0310 / STA $0311 / ...`). A probe for that address
+over 20M instructions reports `never`. It is not reached by a `JSR` either —
+there is no `20 85 6D` anywhere in the image — so it must be reached through
+the ROM's indirect dispatch (`JMP ($0026)`, `JMP ($0034)`, and the trampoline at
+`$D28B`, which sets the bank from `$28` and jumps through a pointer pair).
+Only banks 1 and 3 execute in a 20M-instruction window, so the handler bank
+holding that entry is never selected.
+
+That is the precise blocker: **the state machine never leaves state 0**, so the
+display is never marked dirty and nothing is ever blitted. It is not a CPU,
+timer, interrupt or blit problem — all four are verified.
+
+## Tooling
+
+`tools/disasm.py` disassembles the image with the fixed block and 32 KB bank
+windows handled correctly:
+
+```
+./tools/disasm.py rom.bin 0xCC00 40           # fixed block
+./tools/disasm.py rom.bin --bank 1 0x5900 20  # bank window
+./tools/disasm.py rom.bin --vectors           # interrupt and hardware vectors
+```
+
+It reads `tools/gplb_ops.json`, the 151 standard-6502 encodings, and prints
+branch targets already resolved to absolute addresses.
 
 ## Where the buttons are
 
