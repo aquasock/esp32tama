@@ -270,6 +270,35 @@ Measured with that model: 98,398 cycles per expiry, **61.0 Hz**, against a
 64-common LCD frame. The CPU is unaffected — Klaus Dormann's suite still passes
 at `pc=$3469` after 30,646,176 instructions.
 
+## Verification
+
+`core/tamago_check.c` asserts the display model against the firmware's own
+blit, so a regression shows up as a failure instead of a subtly wrong picture:
+
+```
+gcc -O2 -o tamago_check core/tamago_check.c core/gplb.c
+./tamago_check /path/to/tamago.rom
+```
+
+It checks that the 31-row blit reproduces the `$0400` framebuffer byte for
+byte, that the destination addresses stay inside LCD RAM and never double up,
+and that the TIMER1 tick lands in the frame band. All five pass:
+
+```
+PASS blit: LCD RAM matches the $0400 framebuffer
+PASS geometry: all blit destinations are inside LCD RAM
+PASS geometry: no destination byte is written twice
+PASS geometry: 31 rows x 12 bytes covered
+     TIMER1 tick: 61.0 Hz (364 expiries)
+PASS timer: tick is in the 50-75 Hz frame band
+OK
+```
+
+The geometry the checks confirm: 31 rows of 12 bytes, at 2 bits per dot, in a
+contiguous 372-byte block. At 48 dots wide the block renders as a bordered
+panel with vertical rules, a bounded band of evenly spaced dashes, and a circle
+— a diagnostic layout, not a scene.
+
 ## Where the buttons are
 
 There is no button port in the read census. The firmware reads only `$3000`,
