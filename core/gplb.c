@@ -56,6 +56,7 @@ struct gplb {
     uint32_t t1_reload, t1_count;
     uint32_t t1_prescale;        /* CPU cycles per timer tick */
     uint32_t t1_acc;             /* cycles accumulated toward the next tick */
+    uint8_t  t1_running;         /* one-shot busy; mirrors $3016 bit 0 */
     uint8_t  nmi_pending;
     uint64_t nmi_count, irq_count;
     uint8_t  page_crossed;   /* set by abs,X / abs,Y / (zp),Y addressing */
@@ -106,6 +107,11 @@ static inline void set_ps(gplb *c, uint8_t ps)
  * 1.5 Hz. */
 #define IO_T1_HI    0x0014   /* $3014 - TIMER1 reload, high byte */
 #define IO_T1_LO    0x0015   /* $3015 - TIMER1 reload, low byte */
+/* $3016 is the TIMER1 control register. Bit 0 starts a one-shot run and the
+ * hardware clears it again on expiry - that is what the poll loop at $AEB9
+ * is waiting for (DEX/BEQ 256 iterations, then LDA $3016 / AND #$01 / BNE).
+ * Bits 1 and 2 are also driven from the shadow copy in RAM $21. */
+#define IO_T1_CTRL  0x0016
 
 /* IO write trace, for working out register semantics from the firmware. */
 #include <stdio.h>
@@ -118,6 +124,10 @@ static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
     if (gplb_io_trace && gplb_io_writes < 400)
         fprintf(stderr, "IO %04X <- %02X\n", 0x3000 + idx, v);
 
+    if (gplb_io_trace && idx >= 0x10 && idx <= 0x16)
+        fprintf(stderr, "T1REG cyc=%llu %04X <- %02X (pc=%04X) reload=%u run=%u\n",
+                (unsigned long long)c->cycles, 0x3000 + idx, v, c->pc,
+                c->t1_reload, c->t1_running);
     if (gplb_io_trace && idx >= 0x70 && idx <= 0x77)
         fprintf(stderr, "IRQREG %04X <- %02X (pc=%04X)\n",
                 0x3000 + idx, v, c->pc);
@@ -162,14 +172,28 @@ static void io_write_side_effects(gplb *c, uint16_t idx, uint8_t v)
         break;
     }
     case IO_T1_HI:
-    case IO_T1_LO: {
-        /* Rebuild from the live register image: the second byte of each pair
-         * lands after the first, so acting on either byte alone would latch a
-         * half-written reload. */
-        uint32_t r = ((uint32_t)c->io[IO_T1_HI] << 8) | (uint32_t)c->io[IO_T1_LO];
-        if (r != 0) { c->t1_reload = r; c->t1_count = r; }
+    case IO_T1_LO:
+        /* Just a reload latch. Starting is $3016's job: the ROM always writes
+         * the reload first (e.g. $3015=$7E, $3014=$01) and only then writes the
+         * control byte. */
+        c->t1_reload = ((uint32_t)c->io[IO_T1_HI] << 8) | (uint32_t)c->io[IO_T1_LO];
         break;
-    }
+    case IO_T1_CTRL:
+        /* The ROM writes this register constantly as a copy of the RAM shadow
+         * at $21, cycling through $04-$07. Those writes are not start/stop
+         * commands: the cycle continues with the tick alive, so gating the
+         * timer on bit 0 here stops it mid-run and hangs the boot path at
+         * $769C. The real stop is a zero reload - $C318 and $C326 clear
+         * $3014, $3015 and $3016 together to shut the block down.
+         *
+         * Bit 0 is still the poll flag: writing it set arms the run bit that
+         * the loop at $AEB9 waits to clear, and each expiry clears it. */
+        if (v & 0x01) c->io[IO_T1_CTRL] |= 0x01;
+        else          c->io[IO_T1_CTRL] &= (uint8_t)~0x01;
+        if (gplb_io_trace)
+            fprintf(stderr, "  -> t1 start=%d reload=%u\n",
+                    c->t1_running, c->t1_reload);
+        break;
     case IO_IRQ_ACK_LO:
     case IO_IRQ_ACK_HI: {
         int base = (idx == IO_IRQ_ACK_LO) ? 0 : 8;
@@ -771,18 +795,23 @@ uint32_t gplb_step(gplb *c)
 
     c->cycles += raw;
 
-    /* TIMER1 counts down from its reload and raises NMI when it wraps. */
+    /* TIMER1 free-runs while it has a non-zero reload and expires in a burst of
+     * events that the firmware is demonstrably waiting on:
+     *   - the run bit in $3016 clears, which releases the poll loop at $AEB9;
+     *   - NMI fires, and $D26B - reachable only through the NMI vector - is
+     *     the sole setter of $01A7 = $80, the flag the boot path spins on;
+     *   - vector 10 fires, and $D166 is the sole setter of $2D, the flag the
+     *     main loop spins on. */
     if (c->t1_reload) {
         c->t1_acc += raw;
         while (c->t1_acc >= c->t1_prescale) {
             c->t1_acc -= c->t1_prescale;
             if (c->t1_count == 0) {
+                /* Auto-reload, and drop the poll flag so the loop at $AEB9
+                 * (which waits for bit 0 to clear) sees one expiry per arming
+                 * while the periodic tick keeps running for the boot path. */
                 c->t1_count = c->t1_reload;
-                /* One frame tick. It reaches the ROM two ways: as NMI, whose
-                 * handler ($D26B) sets the $01A7 flag the boot path waits on,
-                 * and as vector 10, whose handler ($D166) sets the $2D flag the
-                 * main loop waits on. Both waits exist and only these two
-                 * handlers set those flags, so both belong to this event. */
+                c->io[IO_T1_CTRL] &= (uint8_t)~0x01;
                 c->nmi_pending = 1;
                 c->irq_pending |= (uint16_t)(1u << 10);
             } else {
@@ -851,6 +880,7 @@ void gplb_reset(gplb *c)
      * $017E at ~61 Hz, which matches a 64-common LCD frame. */
     c->t1_prescale = 256;
     c->t1_acc = 0;
+    c->t1_running = 0;
     c->t1_reload = c->t1_count = 0;
     c->nmi_pending = 0;
     c->nmi_count = 0;
