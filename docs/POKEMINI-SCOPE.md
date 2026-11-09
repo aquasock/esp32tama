@@ -68,10 +68,10 @@ Extrapolating to the T-Watch Ultra (ESP32-S3, 240 MHz):
 - Frame budget at 72 Hz is 4 MHz ÷ 72 = **55,555 emulated cycles**, about
   13,900 instructions per frame.
 
-A dedicated gate report on the display path is in
-`docs/POKEMINI-DISPLAY-GATE.md`: it passes conditionally, with 61-98 fps
-available at 3x zoom using dirty rectangles on the current driver, and far more
-with DMA.
+A dedicated gate report is in `docs/POKEMINI-DISPLAY-GATE.md`. **It passes on
+measurement:** the display agent timed real transfers on the watch at 11.42 us
+per 64-byte chunk, per-transfer fixed cost zero, panel share 1.6 %. A 288x192
+update is 19.7 ms = **51 fps** with no dirty rectangles at all.
 
 **This is an estimate, not a measurement.**
 

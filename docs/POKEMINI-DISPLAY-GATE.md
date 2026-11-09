@@ -5,15 +5,66 @@ Asked and answered on 2026-11-09.
 
 ## Verdict
 
-**Passes, conditionally** — and the range is wider than first written; see
-*A constraint I found late* below, which narrows 61–98 fps to **38–61 fps** at
-3× with 20 % dirty rectangles. The display path is not a hardware wall — it is a
-driver implementation limit that is already documented by the agent who owns
-that code, and it has roughly **7–13× of headroom** available.
+**Passes.** Measured on the watch by the display-driver agent on 2026-11-09:
 
-Pokémon Mini at 3× zoom with dirty-rectangle updates lands at **61–98 fps**,
-which is comfortably enough for the target games. Full-frame at 3× does not,
-at 12–20 fps.
+```
+288x192 full frame, one transfer:  19.7 ms  =  51 fps
+per-transfer fixed cost:           zero (within noise)
+panel's share of transfer time:    1.6 %
+```
+
+A 288×192 update — the size that looks right on a 410×502 panel — sustains
+**~51 fps** with no dirty-rectangle trickery at all. That settles the question
+the earlier sections of this document were hedging about.
+
+Three of my earlier assumptions were wrong, and the measurements that corrected
+them are recorded below rather than quietly dropped:
+
+- **per-transfer fixed cost is zero**, not the thing to worry about;
+- **DMA caps at ~2×**, not the 5–10× I assumed;
+- **the 190 ms figure is 4.2× slower than the measurement implies**, so every
+  number in the superseded sections below should be ignored.
+
+## What the display agent measured
+
+They added `CO5300_IOC_BENCH` to the driver, which times the same payload twice:
+once with CS asserted so the panel receives it, and once with CS never asserted
+so the peripheral clocks bytes into nothing. The difference is the panel's own
+share.
+
+```
+shape      bytes   chunks   CS asserted   CS not asserted   panel share
+288x2       1152       18        197 us          193 us          4 us
+288x64     36864      576       6572 us         6470 us        102 us
+```
+
+Fit: **11.42 µs per 64-byte chunk, intercept −8.6 µs** (zero within noise).
+Verified independently — their published figures reproduce exactly.
+
+Four conclusions, all of which change this document:
+
+**1. Per-transfer fixed cost is zero.** This kills the concern in *A constraint
+I found late* below. Splitting a frame into 96 two-row bands costs nothing extra
+in overhead; the 2-row tearing cap is a throughput non-issue.
+
+**2. The panel is not the bottleneck — 1.6 %.** They timed it, then removed it
+from the circuit by never asserting CS, and the time barely moved. The panel is
+excluded outright.
+
+**3. DMA caps the gain at ~2×, not 5–10×.** My earlier estimate assumed all the
+missing time was FIFO poking. It is 5 µs per chunk of CPU work (16 `memcpy_toio`
+writes, a length write, a `cpu_relax()` poll), which is half the 11.42 µs, so
+removing the CPU from the path entirely can at most double throughput. **My
+5–10× figure was wrong.**
+
+**4. The 190 ms does not reconcile, and my arithmetic was built on it.** 4000
+chunks at 11.42 µs is **45.7 ms**, 4.2× faster than the recorded figure. The
+agent flags this rather than resolving it: LCD-005 predates a CS-handling fix and
+may have included work outside the transfer. Until it is re-measured through the
+real repaint path, **both numbers are suspect** — including every row of the
+tables in my earlier sections.
+
+DMA is *not* implemented. The bench measures; it does not fix.
 
 ## What is measured, and by whom
 
@@ -55,7 +106,12 @@ Verified in `final/spi-esp32.c`:
 The DMA registers are already defined and partly wired (`SPI_DMA_CONF_REG`,
 `SPI_DMA_INT_ST_REG`), so the plumbing is half-present.
 
-## The arithmetic
+## The arithmetic (superseded)
+
+> **Superseded.** Everything below is derived from the 190 ms figure, which the
+> transfer-cost measurement contradicts by 4.2×. It is kept because the method
+> and the sensitivity analysis are still worth reading, but **do not quote these
+> numbers**. Use the measured table in *What the display agent measured*.
 
 The two records disagree slightly about what the 190 ms covers, so both
 readings are given. Neither changes the verdict.
@@ -108,7 +164,7 @@ original.
 
 **The CPU is not the binding constraint.** The display path is.
 
-## A constraint I found late, and it matters
+## A constraint I found late — resolved
 
 `final/co5300.c` carries a warning that changes the dirty-rectangle assumption:
 
@@ -128,9 +184,13 @@ per transfer, and `panel-api.md` notes rectangles are split into row bands
 regardless because CS edges end the burst. So a dirty rectangle is not one
 transfer — a 288x192 region is **96 transfers of 2 rows each**.
 
-That does not invalidate the estimate, but it widens it, because per-transfer
-fixed cost (CS assert/release, address-window setup, completion poll) now
-applies 96 times rather than once:
+**This concern is now resolved: per-transfer fixed cost measured at zero.** The
+table below was built on an assumed per-transfer cost that does not exist. Kept
+for the record only.
+
+That said, at the time it widened the estimate, because per-transfer
+fixed cost (CS assert/release, address-window setup, completion poll) would have
+applied 96 times rather than once:
 
 | Fixed cost per transfer | 3x full frame | 3x 20 % dirty |
 |---|---|---|
@@ -151,11 +211,28 @@ root-caused, the 2-row cap can go, and everything on this page improves.
 
 ## What this means for the port
 
-At 3× zoom (288×192, the size that actually looks right on a 410×502 panel):
+Measured basis, at 11.42 µs per 64-byte chunk:
 
-- **Full frame, today's driver:** 12–20 fps. Not shippable.
-- **20 % dirty rectangles, today's driver:** 61–98 fps. Shippable.
-- **Full frame, with DMA:** 90–150 fps. Plenty.
+| Target | Bytes | Chunks | Time | FPS |
+|---|---|---|---|---|
+| 96×64 native | 12,288 | 192 | 2.2 ms | 456 |
+| 192×128 (2×) | 49,152 | 768 | 8.8 ms | 114 |
+| **288×192 (3×)** | **110,592** | **1,728** | **19.7 ms** | **51** |
+| 384×256 (4×) | 196,608 | 3,072 | 35.1 ms | 28 |
+| 864×576 (9×) | 995,328 | 15,552 | 177.6 ms | 5.6 |
+
+So the choice is a zoom decision, not a platform decision:
+
+- **3× (288×192) sustains ~51 fps with no tricks.** This is the sweet spot.
+- 4× drops to 28 fps, which is marginal for Pinball.
+- Anything larger is out.
+
+Dirty rectangles would push 3× far higher (20 % coverage ≈ 253 fps), but they
+are no longer *required* to pass. They become an optimisation, not a gate.
+
+Caveat: the bench writes from the driver's own transmit buffer. A real frame
+also costs a copy out of the framebuffer first, so real-world numbers will be
+somewhat below these.
 
 Pokémon Mini is also a favourable case for dirty rectangles in a way the
 Tamagotchi is not: the panel is 96×64 and games typically repaint a status bar
@@ -165,38 +242,47 @@ carries over.
 
 ## What has to happen, and whose work it is
 
-1. **DMA on the `host.io` path** — `esp32_spi_exec_op` in
-   `Escapement/patches/kernel/display/final/spi-esp32.c`. This is the other
-   agent's file. Expected 7–13× improvement; it is the single highest-value
-   change for any emulator on this board, Pokémon Mini included.
-2. **Partial blit** — `co5300_blit` currently sends a whole window as one
-   spi-mem op, and STATUS notes there is "no double buffering, no partial
-   blit". Needed for dirty rectangles.
-3. **Confirm the 190 ms basis** — whether it was 320×400 or the full 410×502
-   buffer. Cheap question, changes the estimate by 1.6×.
+**Nothing is blocking the port any more.** The measurement moved everything that
+was a gate into the optional column:
 
-Items 1 and 3 are askable in one message. Item 2 is port-side work.
+1. **DMA on `host.io`** — still worth doing (a ~2× ceiling), still the other
+   agent's file, no longer required for this platform to ship at 51 fps.
+2. **Dirty rectangles** — an optimisation for higher frame rates, not a gate.
+3. **The 190 ms discrepancy** — worth settling for the *console's* sake, not
+   ours. It does not affect the Pokémon Mini decision.
+
+There is now a `CO5300_IOC_WRITE_RECT` ioctl for writing named rectangles in
+panel coordinates, specified in `Escapement/docs/panel-api.md` and reserved for
+the four edge strips around fb0 (`panel-reservations.md`). Both are
+specifications rather than shipped code except for the bottom bar. A 288×192
+image does not need the strips — it fits inside fb0's 320×400 — but the ioctl is
+the natural path for a partial-update renderer if one is wanted.
 
 ## Honest limits of this report
 
-- The 190 ms is **their measurement, not re-verified by me**. I was asked not
-  to touch the watch while the other agent is on it.
-- The DMA and dirty-rectangle columns are **arithmetic on measured bandwidth**,
-  not measurements. They are the right order of magnitude and nothing more.
-- The 20 % dirty figure is an assumption about game behaviour, not a
-  measurement of Pokémon Mini specifically.
-- So the gate is a **strong pass on paper and still needs one hardware
-  confirmation**: either a DMA'd frame time, or a real dirty-rectangle blit
-  timing. That confirmation is cheap once the board is free.
+- The transfer timings are the **display agent's** measurements, not mine. I
+  verified their arithmetic reproduces but did not run the bench.
+- Their bench writes from the driver's transmit buffer. A real frame also costs
+  a copy out of the framebuffer, so production numbers will be **lower** than
+  the 19.7 ms above.
+- The 288×192 figure assumes one rectangular transfer. The 2-row cap (kept for
+  tearing, root cause still open) requires 96 transfers instead — which is free,
+  because per-transfer cost measured at zero. That reasoning is sound but the
+  combined case has not itself been timed.
+- The CPU half is measured on x86 and only *estimated* for the ESP32-S3. Still
+  unmeasured on target.
 
 ## Recommendation
 
-Proceed, but in the order that respects the risk:
+**Ship it at 3× zoom.** The display gate is passed on measurement, not on
+arithmetic, and the remaining risk has moved to the place it belongs: the
+cross-compiled core's realtime factor on the watch.
 
-1. Ask for DMA + a re-measure. That is one message and it converts the whole
-   table from arithmetic into measurement.
-2. While waiting, do the part that needs no display at all: vendor PokeMini,
-   build the headless harness, and measure the core's realtime factor. That
-   work is independent, reversible, and useful even if the display verdict
-   flips.
-3. Only wire UI and rendering after both numbers exist.
+Order of work:
+
+1. **Measure the core on target** — the only unmeasured quantity left.
+2. **Then the front end** at 288×192, flat, no dirty rectangles. 51 fps is
+   enough for the target games; optimisation can come later if it is wanted.
+3. **DMA and dirty rectangles are optional**, and DMA is capped at ~2× anyway.
+
+Nothing here needs further kernel work.
