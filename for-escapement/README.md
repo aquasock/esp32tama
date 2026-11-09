@@ -85,6 +85,46 @@ disk here:
 
 Rebuild it in one command if it is missing or stale.
 
+## What validation it has had
+
+There **is** an Xtensa emulator on this machine and I tried to use it. QEMU
+10.2.1 source sits in `~/.cache/tang-phosphor-dev/qemu-10.2.1`; it was configured
+for `riscv32-linux-user` only, so I built a new one:
+
+```
+configure --target-list=xtensa-linux-user --disable-system --disable-docs \
+          --disable-tools --disable-guest-agent
+ninja qemu-xtensa
+# -> ~/.cache/tang-phosphor-dev/qemu-10.2.1/build-xtensa/qemu-xtensa
+```
+
+`linux-user/xtensa` exists in QEMU, so in principle it can run a static Xtensa
+userspace ELF exactly like this one. **It cannot run this binary, and the reason
+is the CPU core, not the binary.** QEMU implements generic Xtensa cores:
+
+```
+dc232b  dc233c  de212  de233_fpu  dsp3400  lx106  sample_controller  test_mmuhifi_c3
+```
+
+No LX7. The ESP32-S3's core is absent, and the toolchain only emits esp32s3 code
+(only `esp32s3.so` exists in the dynconfig, and `-mcpu=dc232b` is rejected).
+
+The control experiment is what makes this a statement about QEMU rather than a
+suspicion about the binary: **a trivial hello-world compiled by the same
+toolchain fails identically**, same `Illegal instruction`, on every core QEMU
+offers. So:
+
+| Check | Result |
+|---|---|
+| Binary is a well-formed static Xtensa ELF | yes — 2 LOAD segments, 4 KB aligned, entry `0x401c20` inside `.text` |
+| No dynamic dependencies | yes — no `INTERP`, no `PT_DYNAMIC` |
+| Same source under ASan + UBSan, both modes | clean, no findings |
+| Runs under QEMU | **not possible** — no LX7 core in QEMU, toolchain cannot target another one |
+| Runs on the watch | unverified; that is the ask |
+
+So the first real execution is on your board. Everything that could be checked
+without an LX7 core has been.
+
 ## How it was built
 
 ```sh
