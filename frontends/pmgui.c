@@ -16,7 +16,8 @@
  *   Z           A
  *   X           B
  *   C           C
- *   Enter       Power
+ *   Enter       A (same as Z)
+ *   P           Power - not Enter, see key_event()
  *   F5 / F9     save / load state
  *   F1 / F2     window smaller / larger
  *   M           mute
@@ -165,26 +166,33 @@ static SDL_Window   *g_win;
 static SDL_Renderer *g_ren;
 static SDL_Texture  *g_tex;
 static int  g_scale = DEFAULT_SCALE;
-static uint32_t g_px[PM_SCREEN_W * PM_SCREEN_H];
+/* The panel is monochrome, but drawing it as pure white is a trap: an
+ * all-unlit screen then looks like a dead window rather than a working
+ * emulator showing nothing. A soft off-white inside a dark bezel makes the
+ * difference obvious at a glance. */
+#define PM_OFF   0xFFC8C8BEu    /* unlit dot */
+#define PM_ON    0xFF16161Au    /* lit dot */
+#define PM_BEZEL 0xFF2A2A30u    /* surround, so the panel edge is visible */
+#define PM_GAP   6              /* bezel thickness in panel pixels */
 
-/* Four shades, light to dark, like the original panel. */
-static const uint32_t PM_SHADE[4] = { 0xFFDDDDD5u, 0xFFA8A8A0u,
-                                      0xFF5E5E58u, 0xFF141416u };
+#define PM_TEX_W (PM_SCREEN_W + PM_GAP * 2)
+#define PM_TEX_H (PM_SCREEN_H + PM_GAP * 2)
+static uint32_t g_px[PM_TEX_W * PM_TEX_H];
 
 static void display_init(void)
 {
     SDL_InitSubSystem(SDL_INIT_VIDEO);
     g_win = SDL_CreateWindow("Pokémon Mini",
                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             PM_SCREEN_W * g_scale, PM_SCREEN_H * g_scale,
+                             PM_TEX_W * g_scale, PM_TEX_H * g_scale,
                              SDL_WINDOW_RESIZABLE);
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
-    SDL_RenderSetLogicalSize(g_ren, PM_SCREEN_W, PM_SCREEN_H);
+    SDL_RenderSetLogicalSize(g_ren, PM_TEX_W, PM_TEX_H);
     /* Nearest neighbour: 96x64 is a dot matrix and should stay one. */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888,
-                              SDL_TEXTUREACCESS_STREAMING, PM_SCREEN_W, PM_SCREEN_H);
+                              SDL_TEXTUREACCESS_STREAMING, PM_TEX_W, PM_TEX_H);
     SDL_SetTextureScaleMode(g_tex, SDL_ScaleModeNearest);
 }
 
@@ -192,12 +200,33 @@ static void display_init(void)
  * The core keeps a decayed intensity array in LCDPixelsA for the "fading dot"
  * effect; using LCDPixelsD here keeps the reference crisp and readable, which
  * is what a reference is for. */
+static int g_blank_streak;      /* consecutive frames with nothing lit */
+
 static void display_frame(const uint8_t *dots)
 {
-    for (int i = 0; i < PM_SCREEN_W * PM_SCREEN_H; i++)
-        g_px[i] = PM_SHADE[dots[i] ? 3 : 0];
+    for (int y = 0; y < PM_TEX_H; y++) {
+        for (int x = 0; x < PM_TEX_W; x++) {
+            int sx = x - PM_GAP, sy = y - PM_GAP;
+            uint32_t c = PM_BEZEL;
+            if (sx >= 0 && sx < PM_SCREEN_W && sy >= 0 && sy < PM_SCREEN_H)
+                c = dots[sy * PM_SCREEN_W + sx] ? PM_ON : PM_OFF;
+            g_px[y * PM_TEX_W + x] = c;
+        }
+    }
 
-    SDL_UpdateTexture(g_tex, NULL, g_px, PM_SCREEN_W * (int)sizeof(uint32_t));
+    /* If the panel stays empty the emulator is still alive and the window is
+     * still updating - say so, so a blank screen is not mistaken for a hang. */
+    int lit = 0;
+    for (int i = 0; i < PM_SCREEN_W * PM_SCREEN_H; i++)
+        if (dots[i]) { lit = 1; break; }
+    if (!lit) {
+        if (++g_blank_streak == 90)
+            fprintf(stderr, "display: 90 frames with nothing lit (still running)\n");
+    } else {
+        g_blank_streak = 0;
+    }
+
+    SDL_UpdateTexture(g_tex, NULL, g_px, PM_TEX_W * (int)sizeof(uint32_t));
     SDL_RenderClear(g_ren);
     SDL_RenderCopy(g_ren, g_tex, NULL, NULL);
     SDL_RenderPresent(g_ren);
@@ -219,7 +248,11 @@ static void key_event(SDL_Keycode k, int down)
     case SDLK_z:      key = 0x02; break;   /* A */
     case SDLK_x:      key = 0x01; break;   /* B */
     case SDLK_c:      key = 0x40; break;   /* C */
-    case SDLK_RETURN: key = 0x80; break;   /* Power */
+    /* Power is not on Enter. On a real console Power suspends the machine, so
+     * binding the key everyone reaches for first blanks the screen and looks
+     * like a crash. Enter duplicates A, which is what "start" means. */
+    case SDLK_RETURN: key = 0x02; break;   /* A */
+    case SDLK_p:      key = 0x80; break;   /* Power, deliberately awkward */
     default: return;
     }
     PokeMini_KeypadEvent(key, down);
@@ -313,12 +346,14 @@ int main(int argc, char **argv)
 
     fprintf(stderr,
         "ready: %dx%d at %dx, %d Hz audio\n"
-        "arrows d-pad, Z=A X=B C=C, Enter=Power, M=mute, Esc=quit\n",
+        "arrows d-pad, Z/Enter=A X=B C=C, P=Power, M=mute, Esc=quit\n",
         PM_SCREEN_W, PM_SCREEN_H, g_scale, PM_AUDIO_HZ);
 
     int running = 1, muted = 0;
-    uint64_t next_tick = SDL_GetTicks64();
-    const uint64_t tick_ms = 1000u / PM_FRAME_HZ;
+    /* Pace in microseconds. 1000/72 truncates to 13 ms, which is 76.9 Hz - the
+     * emulator then runs 7% fast and the audio buffer drains against it. */
+    const uint64_t tick_us = 1000000u / PM_FRAME_HZ;
+    uint64_t next_tick = (uint64_t)SDL_GetTicks() * 1000u;
 
     while (running) {
         SDL_Event e;
@@ -341,7 +376,7 @@ int main(int argc, char **argv)
                     g_scale += (k == SDLK_F2) ? 1 : -1;
                     if (g_scale < 1) g_scale = 1;
                     if (g_scale > 16) g_scale = 16;
-                    SDL_SetWindowSize(g_win, PM_SCREEN_W * g_scale, PM_SCREEN_H * g_scale);
+                    SDL_SetWindowSize(g_win, PM_TEX_W * g_scale, PM_TEX_H * g_scale);
                     continue;
                 }
                 key_event(k, down);
@@ -360,7 +395,11 @@ int main(int argc, char **argv)
                 static int16_t buf[2048 * 2];
                 Uint32 want_bytes = target - queued;
                 if (want_bytes > sizeof(buf)) want_bytes = sizeof(buf);
-                MinxAudio_GetSamplesS16(buf, (int)(want_bytes / (2 * sizeof(int16_t))));
+                /* MinxAudio_GetSamplesS16 takes a count of int16 *values*, not
+                 * of frames: the reference SDL front end passes `len >> 1` for
+                 * `len` bytes. Passing want_bytes/4 fills only half the buffer
+                 * and queues the other half as uninitialised memory. */
+                MinxAudio_GetSamplesS16(buf, (int)(want_bytes / sizeof(int16_t)));
                 SDL_QueueAudio(adev, buf, want_bytes);
             }
         }
@@ -370,10 +409,13 @@ int main(int argc, char **argv)
         /* Pace to 72 Hz without drifting: add a tick to the deadline instead of
          * sleeping from now, so a slow frame does not push every later frame
          * back. If we fall more than a frame behind, resynchronise. */
-        next_tick += tick_ms;
-        uint64_t now = SDL_GetTicks64();
-        if (now < next_tick) SDL_Delay((Uint32)(next_tick - now));
-        else if (now - next_tick > tick_ms) next_tick = now;
+        next_tick += tick_us;
+        uint64_t now = (uint64_t)SDL_GetTicks() * 1000u;
+        if (now < next_tick) {
+            SDL_Delay((Uint32)((next_tick - now) / 1000u));
+        } else if (now - next_tick > tick_us * 2) {
+            next_tick = now;                  /* fell far behind: resynchronise */
+        }
     }
 
     if (adev) SDL_CloseAudioDevice(adev);

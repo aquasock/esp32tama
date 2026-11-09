@@ -32,16 +32,47 @@ Needs SDL2 and zlib development files.
 ## Keys
 
 ```
-arrows    d-pad
-Z         A
-X         B
-C         C
-Enter     Power
-F5 / F9   save / load state
-F1 / F2   window smaller / larger
-M         mute
-Esc       quit
+arrows        d-pad
+Z or Enter    A
+X             B
+C             C
+P             Power    <- deliberately not Enter
+F5 / F9       save / load state
+F1 / F2       window smaller / larger
+M             mute
+Esc           quit
 ```
+
+Power used to be Enter. On a real console Power suspends the machine, so the
+key most people reach for first would blank the screen and look like a crash.
+Enter is now a second A, and Power moved to P where it has to be chosen.
+
+## Bugs found after the first report of a white screen
+
+The operator reported a white screen. It was **not reproducible** in the core:
+all twelve cartridges were driven for 1,500 frames each and every blank period
+was confined to power-on (frames 10-50) and a second one during the title
+transition (190-230). No ROM ever hung blank, and none ended with an empty
+screen. Twelve seconds of scripted input on the running window produced no
+blanking either.
+
+Three real bugs were found while looking, all fixed:
+
+1. **Audio was half-silent garbage.** `MinxAudio_GetSamplesS16` takes a count of
+   int16 *values*, and the reference front end passes `len >> 1`. This front end
+   passed `want_bytes / 4`, so half of every buffer was uninitialised memory
+   queued as samples.
+2. **The emulator ran 7 % fast.** Pacing used `1000 / 72`, which truncates to
+   13 ms — that is 76.9 Hz, and the audio buffer drained against it. Pacing is
+   now fractional microseconds.
+3. **Power was on Enter**, as above.
+
+And one visibility fix, which is the likely explanation for the report: an
+all-unlit screen used to render as a full-window near-white rectangle with no
+border, indistinguishable from a dead window. The panel now sits in a dark bezel
+on a soft off-white, so an empty screen is visibly an empty *screen*, and a
+watchdog prints `display: 90 frames with nothing lit (still running)` if the
+panel stays empty for three seconds.
 
 Save states go to `<cartridge>.state` next to the cartridge, using PokeMini's
 own snapshot format. Verified: PC `003313` → `032326` after 400 more frames →
