@@ -60,3 +60,23 @@ the behaviour they implement is BrickEmuPy's.
 `assets/Tamagotchi_v3.svg` is from BrickEmuPy (CC0). It is the source for
 `frontends/segmap.c` and is included so the segment map can be regenerated at a
 different dot size.
+
+## Relicensing offer
+
+This repository is GPL-3.0. BrickEmuPy, which it ports, is CC0 — a deliberate
+choice by its author to place that work in the public domain.
+
+GPL-3.0 is viral: merging this code into BrickEmuPy would force BrickEmuPy to
+become GPL-3.0 as well. That is a real cost to impose on someone who chose CC0,
+and it is not the intent here. The core was licensed GPL-3.0 because that is the
+author's general preference, not to bind upstream.
+
+**If azya would rather merge any of this under CC0, say so and it will be
+relicensed.** Specifically, on request and without condition:
+
+- `core/*` may be relicensed CC0 1.0
+- `frontends/segmap.c` is already derived from CC0 artwork and may be CC0
+- anything else requested
+
+The offer applies to the upstream author for the purpose of merging into
+BrickEmuPy. It does not require attribution beyond what is already here.
