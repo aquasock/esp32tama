@@ -47,7 +47,60 @@ Power used to be Enter. On a real console Power suspends the machine, so the
 key most people reach for first would blank the screen and look like a crash.
 Enter is now a second A, and Power moved to P where it has to be chosen.
 
-## Bugs found after the first report of a white screen
+## The key mapping was wrong, and that was the white screen
+
+`PokeMini_KeypadEvent()` takes a **`MINX_KEY_*` enum value (1..9)**, not a bit
+mask. The first version passed bit masks, and the result was silent chaos:
+
+| Key pressed | value sent | key the core saw |
+|---|---|---|
+| Z | 0x02 | **B** |
+| X | 0x01 | **A** |
+| C | 0x40 | *nothing — no such key* |
+| Up | 0x04 | Up (correct, by luck) |
+| Down | 0x08 | **POWER — suspends the console** |
+| Left | 0x10 | *nothing* |
+| Right | 0x20 | *nothing* |
+| P | 0x80 | *nothing* |
+
+So pressing **Down in a game powered the console off**, which is the reported
+white screen. C, Left and Right did nothing at all, which is why the Diglett
+would not respond to C. A and B were swapped.
+
+The mapping now uses the enum names, so this class of mistake is a compile error
+rather than something a player discovers. `tools/pokemini_keys.c` pins it:
+
+```
+PASS up     -> bit 0x08 (want 0x08)
+PASS down   -> bit 0x10 (want 0x10)
+PASS left   -> bit 0x20 (want 0x20)
+PASS right  -> bit 0x40 (want 0x40)
+PASS A      -> bit 0x01 (want 0x01)
+PASS B      -> bit 0x02 (want 0x02)
+PASS C      -> bit 0x04 (want 0x04)
+PASS power  -> bit 0x80 (want 0x80)
+PASS down does not press Power
+OK
+```
+
+Which button does what, measured by deterministic replay in Pokémon Pinball
+(hold a key for 20 frames at a fixed point, compare against an identical run
+with no key):
+
+```
+A      differs 70 px   <- this is the one that responds
+DOWN   differs 38 px
+UP     differs 17 px
+B      differs  0 px
+C      differs  0 px
+LEFT   differs  0 px
+RIGHT  differs  0 px
+```
+
+So for the Diglett flippers, **A** is the live button, and it is now on **Z or
+Enter**. B is mapped correctly too and will respond where the game uses it.
+
+## Other bugs found in the same round
 
 The operator reported a white screen. It was **not reproducible** in the core:
 all twelve cartridges were driven for 1,500 frames each and every blank period

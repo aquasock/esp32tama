@@ -233,26 +233,30 @@ static void display_frame(const uint8_t *dots)
 }
 
 /* ---- input ------------------------------------------------------------ */
-/* PokeMini's key bits, from Hardware/Keyboard: these are the KEY_* constants
- * the BIOS reads from the I/O port. They are active low in the register, and
- * PokeMini_KeypadEvent takes the pressed state. */
+/* PokeMini_KeypadEvent takes a MINX_KEY_* enum value (1..9), NOT a bit mask.
+ *
+ * This was wrong in the first version: it passed bit masks instead, so Z sent
+ * B, X sent A, C sent nothing at all, Left and Right sent nothing, and Down
+ * sent MINX_KEY_POWER — which suspends the console. Pressing Down in a game
+ * therefore blanked the screen, which is exactly the "white screen" that got
+ * reported. Using the enum names here means the compiler catches this class of
+ * mistake instead of a player discovering it.
+ */
 static void key_event(SDL_Keycode k, int down)
 {
     uint8_t key = 0;
 
     switch (k) {
-    case SDLK_UP:     key = 0x04; break;
-    case SDLK_DOWN:   key = 0x08; break;
-    case SDLK_LEFT:   key = 0x10; break;
-    case SDLK_RIGHT:  key = 0x20; break;
-    case SDLK_z:      key = 0x02; break;   /* A */
-    case SDLK_x:      key = 0x01; break;   /* B */
-    case SDLK_c:      key = 0x40; break;   /* C */
-    /* Power is not on Enter. On a real console Power suspends the machine, so
-     * binding the key everyone reaches for first blanks the screen and looks
-     * like a crash. Enter duplicates A, which is what "start" means. */
-    case SDLK_RETURN: key = 0x02; break;   /* A */
-    case SDLK_p:      key = 0x80; break;   /* Power, deliberately awkward */
+    case SDLK_UP:     key = MINX_KEY_UP;    break;
+    case SDLK_DOWN:   key = MINX_KEY_DOWN;  break;
+    case SDLK_LEFT:   key = MINX_KEY_LEFT;  break;
+    case SDLK_RIGHT:  key = MINX_KEY_RIGHT; break;
+    case SDLK_z:
+    case SDLK_RETURN: key = MINX_KEY_A;     break;
+    case SDLK_x:      key = MINX_KEY_B;     break;
+    case SDLK_c:      key = MINX_KEY_C;     break;
+    case SDLK_p:      key = MINX_KEY_POWER; break;
+    case SDLK_s:      key = MINX_KEY_SHOCK; break;  /* rumble sensor */
     default: return;
     }
     PokeMini_KeypadEvent(key, down);
