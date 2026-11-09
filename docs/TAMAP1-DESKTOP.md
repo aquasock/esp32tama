@@ -74,6 +74,44 @@ The asset files in a typical MiSTer set (`boot1.rom`, `boot2.rom`) are **not**
 ROMs — they are background and sprite artwork in raw RGB565 and alpha. Only
 `rom.bin` is the program.
 
+## What devices it runs
+
+These are virtual pets, not cartridge games: each device has one built-in
+program in mask ROM. "Support" means the emulator reproduces that device's
+hardware, so supplying its ROM is the whole job — there is no per-game code.
+
+TamaLib covers **eight devices across two MCUs** (from its README):
+
+| MCU | Devices | Clock |
+|---|---|---|
+| **E0C6S46** | Tamagotchi **P1**, Tamagotchi **P2** | 32,768 Hz |
+| **E0C6S48** | Tamagotchi **Angel**, **Umino** (Ocean), **Morino** (Forest), **Mothra**, **Tamaotch**, **Genjintch** | 32,768 Hz and 1 MHz |
+
+All eight are 32×16 monochrome with 8 icons.
+
+How much of that is actually exercised here:
+
+- **Verified in this repository: P1 only.** The operator's ROM hashes to
+  TamaTool's P1 constant (`CRC 0xC7875F27` over `0x2F0..0x400`), and it boots,
+  animates and responds to buttons.
+- **Supported by the core, untested here: the other seven.** No code change is
+  needed — dropping in an Angel or Morino ROM should work, because the E0C6S48
+  support is compiled in and `cpu.c` already switches between the 32 kHz and
+  1 MHz oscillators when the ROM asks for it.
+- **Device identification is only automated for three.** TamaTool, by the same
+  author, has CRC constants for P1, P2 and Angel and *defaults everything else
+  to P1*. So an unrecognised ROM is not proof of an unsupported one.
+
+Both MCUs are enabled in our build (`E0C6S46_SUPPORT` and `E0C6S48_SUPPORT` in
+`core/tamalib/cpu.h`). Note that `hw.c` prefers the E0C6S48 segment map because
+its `#if` comes first — that is harmless for a P1, because the E0C6S46 map and
+the first 40 entries of the E0C6S48 map are **byte-identical** (verified), and a
+P1 ROM never addresses the extra 11 segments.
+
+Not covered by any of this: the **Connection series** (V1–V6, which is what our
+V3 core is), Tamagotchi Friends, and everything colour. Those are different
+hardware entirely.
+
 ## Keys
 
 ```
