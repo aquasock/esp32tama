@@ -7,7 +7,13 @@
  *
  *   gcc -O2 -DPERFORMANCE -Icore/pokemini \
  *       tools/pokemini_bench.c core/pokemini/*.c -o pokemini_bench
- *   ./pokemini_bench <rom.min> [frames] [--quiet]
+ *   ./pokemini_bench [rom.min] [frames] [--quiet] [--synthetic]
+ *
+ * With no ROM argument, or with --synthetic, a deterministic pseudo-random
+ * cartridge is generated in memory. The interpreter does not care what the
+ * opcodes mean, so this exercises the same dispatch, memory and interrupt paths
+ * as a real title without needing any ROM file - which matters because no
+ * commercial ROM may be distributed and the target device has no ROM on it.
  *
  * Frames default to 4000. Shorter runs measure the CPU frequency ramp rather
  * than the core: the same ROM and binary reports 107 M instructions/sec at 200
@@ -37,6 +43,36 @@ extern unsigned long g_exec_count;   /* added by tools/pokemini_bench.sh */
 #define CYCLES_PER_FRAME (PM_CLOCK_HZ / PM_FRAME_HZ)   /* 55555 */
 #define BUDGET_PER_FRAME 13889                          /* 1 MIPS / 72 Hz */
 
+/* Deterministic xorshift32, so a synthetic run is reproducible across hosts. */
+static uint32_t g_rng = 0x12345678u;
+static uint32_t rnd(void)
+{
+    g_rng ^= g_rng << 13;
+    g_rng ^= g_rng >> 17;
+    g_rng ^= g_rng << 5;
+    return g_rng;
+}
+
+/* Build a synthetic cartridge. A real .min word is 12 bits; randomising them
+ * gives a realistic spread of instruction types and operand patterns, and the
+ * interpreter treats every one the same way it would a real title's. */
+/* 32 KB is the largest a PM cartridge gets, so this is the worst case for the
+ * ROM read path. A static buffer rather than malloc, so a target build has no
+ * heap dependency at all and cannot fail on a fragmented allocator - this board
+ * is NOMMU and has been bitten by that before. */
+#define SYNTH_BYTES 32768
+static unsigned char g_synth[SYNTH_BYTES];
+
+static unsigned char *make_synthetic(unsigned bytes)
+{
+    if (bytes > SYNTH_BYTES) bytes = SYNTH_BYTES;
+    for (unsigned i = 0; i < bytes; i++)
+        g_synth[i] = (unsigned char)(rnd() & 0xFF);
+    return g_synth;
+}
+
+static int bench_rom(const char *path, int frames, int quiet);
+
 static double now_sec(void)
 {
     struct timespec t;
@@ -44,27 +80,31 @@ static double now_sec(void)
     return t.tv_sec + t.tv_nsec / 1e9;
 }
 
-int main(int argc, char **argv)
+static int bench_rom(const char *path, int frames, int quiet)
 {
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s <rom.min> [frames] [--quiet]\n", argv[0]);
-        return 2;
-    }
-    const char *path = argv[1];
-    int frames = (argc > 2 && argv[2][0] != '-') ? atoi(argv[2]) : 4000;
-    int quiet = argc > 2 && strcmp(argv[argc - 1], "--quiet") == 0;
+    /* path == NULL means synthetic: no ROM file, no copyright content. */
+    long len = 0;
+    unsigned char *rom = NULL;
 
-    FILE *f = fopen(path, "rb");
-    if (!f) { perror(path); return 2; }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len <= 0) { fprintf(stderr, "%s: empty\n", path); fclose(f); return 2; }
-    unsigned char *rom = malloc((size_t)len);
-    if (!rom || fread(rom, 1, (size_t)len, f) != (size_t)len) {
-        fprintf(stderr, "%s: read failed\n", path); fclose(f); return 2;
+    if (path) {
+        FILE *f = fopen(path, "rb");
+        if (!f) { perror(path); return 2; }
+        fseek(f, 0, SEEK_END);
+        len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (len <= 0) { fprintf(stderr, "%s: empty\n", path); fclose(f); return 2; }
+        rom = malloc((size_t)len);
+        if (!rom || fread(rom, 1, (size_t)len, f) != (size_t)len) {
+            fprintf(stderr, "%s: read failed\n", path); fclose(f); return 2;
+        }
+        fclose(f);
+    } else {
+        /* 32 KB of synthetic cartridge, which is the largest a PM cartridge gets
+         * and therefore the worst case for the ROM read path. */
+        len = 32768;
+        rom = make_synthetic((unsigned)len);
+        if (!rom) return 2;
     }
-    fclose(f);
 
     if (!PokeMini_Create(0, 0)) { fprintf(stderr, "PokeMini_Create failed\n"); return 1; }
     if (!PokeMini_SetMINMem(rom, (int)len)) {
@@ -97,7 +137,7 @@ int main(int argc, char **argv)
     double per_frame = (double)steps / frames;
 
     if (!quiet) {
-        printf("rom       %s (%ld bytes)\n", path, len);
+        printf("rom       %s (%ld bytes)\n", path ? path : "synthetic", len);
         printf("frames    %d  (%d cycles each, %.1f emulated seconds)\n",
                frames, CYCLES_PER_FRAME, (double)frames * CYCLES_PER_FRAME / PM_CLOCK_HZ);
         printf("wall      %.3f s\n", wall);
@@ -110,6 +150,37 @@ int main(int argc, char **argv)
     }
 
     PokeMini_Destroy();
-    free(rom);
+    if (rom != g_synth) free(rom);
     return 0;
+}
+
+int main(int argc, char **argv)
+{
+    const char *path = NULL;
+    int frames = 4000;
+    int quiet = 0, synthetic = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--quiet")) { quiet = 1; continue; }
+        if (!strcmp(argv[i], "--synthetic")) { synthetic = 1; continue; }
+        if (argv[i][0] == '-') { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
+
+        /* A bare number is the frame count; anything else is the ROM path.
+         * Order-independent, so "--synthetic 2000" and "2000 --synthetic" both
+         * mean the same thing. */
+        int all_digits = 1;
+        for (const char *c = argv[i]; *c; c++) if (*c < '0' || *c > '9') all_digits = 0;
+        if (all_digits && argv[i][0]) frames = atoi(argv[i]);
+        else if (!path) path = argv[i];
+        else { fprintf(stderr, "unexpected argument %s\n", argv[i]); return 2; }
+    }
+    if (synthetic) path = NULL;
+
+    if (!path && !synthetic) {
+        fprintf(stderr,
+            "usage: %s [rom.min] [frames] [--quiet] [--synthetic]\n"
+            "  with no ROM, or with --synthetic, a pseudo-random cartridge is\n"
+            "  generated in memory so the benchmark needs no ROM file.\n", argv[0]);
+    }
+    return bench_rom(path, frames, quiet);
 }
