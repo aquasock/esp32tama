@@ -158,9 +158,10 @@ The firmware reaches its main loop at `$CE3C`/`$CE66` and cycles it rather than
 spinning in the boot wait or crashing, and with the figure connector modelled it
 enters the gameplay path — see *The gate is the figure connector* below.
 
-**Still no picture.** In the gameplay path the screen is cleared and re-drawn
-2.1M times but never painted, because an undocumented handshake at `$3008`
-never completes.
+**Still no picture**, for two separately traced reasons: `$3008` never reports
+ready so the state machine stays in its first state, and nothing ever sets the
+blit's dirty bit in `$2F`. Both are documented under *What still blocks a
+picture*.
 
 The boot-time display writes are still worth recording, because they fix the
 geometry. The trace attributes every byte:
@@ -343,13 +344,19 @@ So it returns `~$3012 & 7`: 7 when all three contacts are low, 0 when all three
 are high. A figure clipped on pulls the contacts low, so a real unit with a
 figure reads **000**, and one without reads **111**.
 
-**The boot branches on it at `$CCE7`, and only 000 proceeds.**
+**The boot branches on it at `$CCE7`.** `$E209` returns `~$3012 & 7`, so the
+comparison is against the *inverted* reading:
 
 ```
 CCE7: JSR $E209
-CCEA: CMP #$07 / BNE $CCF5        ; not all-low -> the "no figure" path
+CCEA: CMP #$07 / BNE $CCF5        ; return value 7 = all contacts low
 CCEE: LDA #$41 / STA $22 / JMP $CD94
 ```
+
+An all-low reading (a figure clipped on) makes `$E209` return 7, which is the
+value that falls through to `$CD94`. With the contacts high it returns 0 and the
+ROM takes the `$CCF5` path instead. Note this is the inverse of the raw line
+value, and an earlier note here stated it the wrong way round.
 
 `$22 = $41` selects the gameplay path. `$CD94` is the real game init: `SEI`,
 `JSR $D70B`, then the segment-driver block `$3064 = $80`, `$3060 = $00`,
@@ -359,49 +366,88 @@ CCEE: LDA #$41 / STA $22 / JMP $CD94
 **Measured effect of modelling the contacts.** Before, `$0310` was never
 written, `$22` stayed 0, and display RAM never changed again after the boot
 blit (888 writes total). With the contacts low, the ROM enters the gameplay
-path, executes bank 1 heavily (86,631 instructions in the window over 30M,
-against 36,867 before), and display activity rises to **2,152,312** writes.
+path and bank 1 executes (86,631 instructions in the window over 30M, against
+36,867 before).
 
 `gplb_set_figure(c, contacts)` exposes this: 0 means a figure is attached
 (contacts low), non-zero means they read high. The default is 0.
 
 ## What still blocks a picture
 
-The screen is cleared and redrawn but never painted, and the reason is the next
-handshake down.
+Two things, both traced exactly. Neither is a CPU, timer, interrupt, blit or
+geometry problem — all five are verified.
 
-`$CF8E` polls `$3008` and selects on bits 0-1:
+### 1. `$3008` never reports "ready", so the state machine loops
+
+`$CF8E` reads `$3008` and sorts on bits 0-1:
 
 ```
 CF8E: LDA $3008 / STA $2E
 CF93: AND #$02 / BEQ $CF9A
-CF97: JMP $CFCB                    ; bit 1 set
-CF9A: LDA $2E / AND #$01 / BNE $CFA3 ; bit 0 set
-CFA0: JMP $CEE2                    ; both clear
+CF97: JMP $CFCB                    ; bit 1 set  -> skip the sensor check
+CF9A: LDA $2E / AND #$01 / BNE $CFA3 ; bit 0 set -> sensor check at $CFA3
+CFA0: JMP $CEE2                    ; both clear -> frame-loop top
 ```
 
-`$CEE2` is a re-initialisation: `$3004 = $55`, `$3060 = 0`, `$3062 = 0`,
-`$3006 = 0`, `$3011 = $10`, `$3010 = $88`, `$3012 = $1F`. With `$3008` reading
-zero the ROM re-runs boot on every pass — that is where the 2.1M display writes
-come from, not from a renderer.
+`$CEE2` is **the top of the frame loop**, not an error path — it programs
+`$3004`, `$3010`/`$3011`, `$3012`, the TIMER1 reload and `$3016`, then falls
+through to `$CF21`. An earlier note here called it a re-initialisation; that was
+wrong.
 
-Forcing `$3008` to 0, 1, 2, 3, 4, 8 and `$FF` changes which path is taken
-(bit 1 lands at `$E812`, bit 0 at `$CE66`) but **none of them produces a drawn
-frame**: the peak non-zero LCD content stays at 376 bytes, the boot pattern, in
-every case. So `$3008` is necessary but not sufficient, and there is at least
-one more condition.
+Execution counts over 8M instructions, with the figure attached:
 
-The register block involved — `$3006`, `$3008`, `$3060`, `$3062`, `$3064`,
-`$3065` — has no public documentation. `$3060` is itself polled 4,203 times in
-the gameplay path by a loop at `$F629` that re-reads until it goes non-zero. The
-most likely reading is that this is the **figure's communication channel**: a
-Tama-Go figure has a small chip on it, and the console handshakes with it before
-the pet appears. Without the figure's protocol implemented, the handshake never
-completes.
+```
+$CF8E  681   read $3008
+$CF93  681   test bit 1
+$CF97  681   bit 1 set -> JMP $CFCB
+$CF9A    0   never reached
+$CFA3    0   sensor check never runs
+$CFCB  681   state block
+```
 
-That is the honest blocker: not a CPU, timer, interrupt, blit or geometry
-problem — all five are verified — but an undocumented handshake with a
-peripheral that is not in the dump.
+The ROM itself writes `$3008 = $FF` at `$CF57` before reading it, so bit 1 is
+always set and `$CFA3` is never reached. The consequence is that `$24` stays 1
+forever, and the clear block at `$CEA7` — gated on `$22 = $41` **and**
+`$24 = 1` — runs on every pass. That is where the million-plus display writes
+come from: an LCD clear in a loop, not a renderer.
+
+Forcing `$3008` bit 1 clear (`$3008 = $01`) does advance the machine: `$24`
+becomes 2 via `$CFBF` (`$3002 = $80`, `JSR $D70B`, `$24 = 2`) and the clear loop
+stops. So `$3008` reads like a **peripheral-driven busy/status flag** that the
+ROM arms by writing `$FF` and then polls — not a latch the ROM can satisfy by
+writing. Without the peripheral, it stays `$FF` and the machine never leaves the
+first state.
+
+No value of `$3008` tried (0, 1, 2, 3, 4, 8, `$80`, `$FF`, with and without a
+figure) produces a drawn frame.
+
+### 2. Nothing ever sets the blit's dirty bit
+
+`$F050` blits the 372-byte framebuffer at `$0400` into LCD RAM, but only when
+`$2F` is non-zero **and bit 7 is set**:
+
+```
+F050: LDA $2F / BNE $F057
+F054: JMP $F0F9                     ; $2F == 0 -> clear and return
+F057: AND #$80 / BEQ $F0F9          ; bit 7 clear -> clear and return
+F05E: ...blit...
+```
+
+Watching `$2F` over 12M instructions with the figure attached and `$3008 = $01`
+gives exactly four changes, all `$00 <-> $01` at `$E45E` (which does `ORA #$01`)
+and `$F0FB` (which clears it). Bit 7 is never set.
+
+The three routines that would set it do `LDA $2F / ORA #$80 / STA $2F` at
+`$E330`, `$E4C4` and `$E666` — and none of them has a single direct `JSR`, `JMP`
+or 16-bit table reference anywhere in the image. (The `$6D85` hits are the
+`STA $6D` instruction, not a pointer.) They are unreachable by static reference,
+so they must be selected by a computed dispatch — most likely the RTS-trick, which
+static analysis cannot follow.
+
+That is the honest wall: the remaining work needs either GeneralPlus'
+programming manual for `$3008`/`$3060`-`$3065`, or a logic-analyser capture from
+a real Tama-Go, or the figure's own protocol. It is not inferable from the ROM
+alone with confidence, and guessing at it would be inventing facts.
 
 ## Tooling
 
