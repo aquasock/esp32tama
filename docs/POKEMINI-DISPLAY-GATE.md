@@ -76,28 +76,37 @@ poll (`run()` spins on `SPI_CMD_REG` with `cpu_relax()`).
 
 ## The CPU half, measured with a real ROM
 
-The free BIOS idles, so it cannot measure real work. But the PokeMini dev kit
-ships homebrew examples **with source** under the same GPL — a legal test ROM
-that actually renders. Using `dev-misc/examples/bouncing/bouncing.min`:
+The free BIOS idles at `$0040` and does no useful work, so it cannot measure
+anything. But PokeMini's dev kit ships homebrew examples **with source** under
+the same GPL, and those run.
 
-```
-loaded 11968 bytes
-frames=300
-CPU steps/frame = 6944   (budget at 1 MIPS / 72 fps = 13889)
-steps/sec = 58,088,700
-```
+> **Correction.** An earlier version of this page said `bouncing` needed 6,944
+> instructions per frame. That was the *free BIOS idle loop*: the harness loaded
+> the ROM but never reset the CPU, so the cartridge never started. The flat
+> 6,945-per-frame figure across five different cartridges is what gave it away —
+> real code does not produce identical counts. Full account in
+> `POKEMINI-CORE.md`.
 
-So a real homebrew title needs **6,944 instructions per frame against a budget
-of 13,889 — about 50 % of the CPU**. In absolute terms that is 500,000
-steps/sec, not 1 MIPS.
+Corrected measurements, 4,000 frames each, `-O2 -DPERFORMANCE`:
 
-Caveat: `bouncing` is a simple demo with a background and one sprite. A retail
-game such as Pokémon Pinball will be heavier. Treat 50 % as a floor on usage
-rather than a typical figure.
+| ROM | Instructions/frame | Budget used |
+|---|---|---|
+| `mapview` | 4,600 | 33 % |
+| `bouncing` | 4,648 | 33 % |
+| `sound_tst` | 4,653 | 34 % |
+| `framebuffer` | 6,619 | 48 % |
+| `template` | 6,945 | 50 % |
 
-Read against the ESP32-S3 at an assumed 150–200 host cycles per emulated
-instruction (240 MHz ÷ 200 … 150 = 1.2–1.6 M steps/sec), that is
-**2.4–3.2× realtime for this ROM**. The CPU side is not the problem.
+The budget is 13,889 instructions per frame (4 MHz ÷ 4-cycle fetch = 1 MIPS,
+÷ 72 Hz). Every example sits between a third and a half of full CPU.
+
+These are demos, not retail games — treat 50 % as a plausible ceiling for a
+simple title, not a measured bound for something like Pokémon Pinball. But
+13,889 is a *hard* ceiling: a title that exceeded it could not run at full speed
+on real hardware either, so the port cannot be asked to do better than the
+original.
+
+**The CPU is not the binding constraint.** The display path is.
 
 ## A constraint I found late, and it matters
 

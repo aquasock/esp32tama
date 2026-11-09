@@ -80,3 +80,30 @@ relicensed.** Specifically, on request and without condition:
 
 The offer applies to the upstream author for the purpose of merging into
 BrickEmuPy. It does not require attribution beyond what is already here.
+
+## PokeMini (Pokémon Mini core)
+
+`core/pokemini/` is vendored from **PokeMini** by JustBurn.
+
+- Project: <https://github.com/pokemon-mini/PokeMini>
+- Revision: `8a64225e21307ee89b18feca0a429a8d2d43e6d1`
+- Version: 0.61
+- Licence: **GPL-3.0**, full text at `core/pokemini/LICENSE-PokeMini`
+- Copyright (C) 2009-2015 JustBurn and contributors
+
+Every file in that directory except `minizip_stubs.c`, `unzip.h` and `README.md`
+is copied verbatim. One upstream file carries a two-line patch for an
+instruction counter, recorded as
+`core/pokemini/patches/0001-exec-counter.patch`.
+
+The free BIOS in `core/pokemini/freebios.c` comes from the same project and
+carries the same licence. It is included so the core can be exercised without
+any commercial ROM.
+
+PokeMini also ships the Pokémon Mini instruction-set reference used to sanity
+check this work (`doc/` upstream), and its dev kit's homebrew examples are used
+as benchmark inputs. Both are GPL-3.0.
+
+This repository is GPL-3.0, so vendoring GPL-3.0 code into it is licence
+compatible. No relicensing offer is made for `core/pokemini/` — that code is
+not ours to relicense.
