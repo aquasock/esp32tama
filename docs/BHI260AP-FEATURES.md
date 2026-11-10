@@ -208,3 +208,134 @@ show up or not.
 
 That is a handful of I2C reads — no driver, no SDK, no firmware, no risk. It is
 the first thing to run when the board is free.
+
+---
+
+# Addendum: correcting the "fitted motion patch" model
+
+The mental model was: *it takes a sequence of x/y/z, learns it, and spits back an
+ideal fitted motion patch.*
+
+Three parts of that are wrong, and the corrections are more useful than the idea.
+
+## Correction 1: cyclic only
+
+> "The self-learning AI software can be used to learn new **cyclic gestures**...
+> The cyclic gesture needs to be the same in between the repetitions and the
+> device needs to **come to the original position to close one cycle**."
+> — §7.4
+
+It does not learn a sequence. It learns a **loop**. A line, a triangle, a
+one-directional swipe, a "draw a Z" — none of those are learnable. A circle, a
+wrist twist-and-return, a bicep curl, a squat, a shake — those are.
+
+Bosch's own examples are exercise shapes: **bicep curls, triceps extensions,
+squats.**
+
+## Correction 2: it is a rep counter, not a shaper
+
+What comes back is not a fitted trajectory. It is:
+
+- **which pattern matched** (or "no match at all" — the datasheet is explicit
+  that it handles the negative case),
+- **a repetition count**, updated in real time,
+- and, separately and only if you ask for it, **the learnt pattern blob** — a
+  compact parameter set, not a curve.
+
+> "The self-learning algorithm **estimates a number of parameters**, like the
+> **frequency and phase of some components** of the movement."
+> — §7.4
+
+So the internal representation is an oscillator model — frequency and phase per
+component. It is a **descriptor**, in the same family as the polynomial
+coefficients idea from the earlier note: small, compact, not a replay of the
+data.
+
+It does **not** smooth, interpolate, generate, or reconstruct motion. If you want
+a fitted trajectory you fit it yourself; this chip tells you *which* loop you are
+doing and *how many times*.
+
+## Correction 3: the speed window is narrow
+
+**0.3 to 1.8 Hz** — one cycle every **0.56 s to 3.33 s**.
+
+```
+0.3 Hz   3.33 s/rep   18 reps/min   slow and deliberate
+0.5 Hz   2.00 s/rep   30 reps/min   exercise tempo
+1.0 Hz   1.00 s/rep   60 reps/min   brisk
+1.8 Hz   0.56 s/rep  108 reps/min   fast
+```
+
+Outside that window, nothing. That rules out anything twitchy, anything slow and
+drift-y, and anything faster than about two per second.
+
+## And the point that decides the whole "feed it numbers" idea
+
+You cannot feed it numbers, unless you have the SDK.
+
+Sensor data injection exists — command `0x0007`, with a companion `Inject Sensor
+Data` at `0x0008` — but:
+
+> "A **dedicated firmware version is required** for this, which replaces the
+> standard physical sensor drivers with data injection drivers. **This can be
+> compiled using the SDK.**"
+
+So the black-box-pure model is gated behind exactly the thing that gates
+everything else. **Synthetic input needs the SDK.**
+
+But teaching it a real motion does not:
+
+- **Move the watch** through the loop. That is real IMU data from the on-chip
+  sensor. No SDK, no injection, no firmware.
+- Enable learning, perform the loop a few times, read the pattern blob out, store
+  it.
+- Enable recognition. From then on, doing that loop yields a match plus a rep
+  count.
+
+**So you can teach this watch gestures by physically doing them, today, with
+register writes. You just cannot teach it gestures the watch never physically
+experienced.**
+
+That is a real and useful distinction, and it is the opposite of what the black-box
+framing assumed.
+
+## What this is genuinely good for on a watch
+
+The constraint — cyclic, 0.56–3.3 s, small output — actually points somewhere
+specific. The data volume is trivially small:
+
+```
+1.8 Hz motion, 4-byte events  =  7.2 B/s  =  0.07 % of the 100 kHz bus
+```
+
+So bandwidth is a non-issue for this feature. It is the one thing on this chip
+that fits the bus comfortably *and* does something the ESP32 cannot do without
+burning cycles.
+
+Ideas, roughly in order of how much I like them:
+
+1. **A secret gesture as authentication.** Twist-and-return in a rhythm only you
+   know. It is a *cyclic* knock pattern, which is exactly what the hardware
+   recognises. Not secure in any serious sense — but as a "wake and unlock"
+   gesture on a watch you wear, it is better than nothing and it is unusual.
+2. **Rep counting for exercise.** Bosch's own design intent. Curls, squats,
+   raises. A watch that counts your sets without you pressing anything.
+3. **Shake-to-undo / shake-to-dismiss.** Cyclic by nature, in the speed window,
+   and a well-understood interaction idiom.
+4. **Rhythmic activity logging** — stirring, brushing, fidgeting. Amusing, low
+   value.
+5. **Repetition counting for accessibility** — counting repeated motions for
+   someone doing physiotherapy, without them operating anything.
+
+What does not fit, and should be ruled out early: swipes, letters, one-way
+strokes, tapping patterns, anything fast, anything slow and continuous.
+
+## The corrected one-liner
+
+Not *"feed it a motion and it hands back a clean version"*.
+
+**"Teach it a loop by physically doing the loop; it then tells you when you are
+doing that loop again and how many times."**
+
+That is narrower than the original idea, and it is a real, working,
+no-SDK-required capability.
