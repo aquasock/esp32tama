@@ -21,14 +21,63 @@
 #include "cpu.h"
 #include "hal.h"
 
-/* SEG -> LCD mapping */
+/* SEG -> LCD mapping.
+ *
+ * These tables were MEASURED from the SVG face artwork that ships inside the
+ * MAME ROM zips, not guessed: each segment's rectangle in the artwork gives its
+ * panel coordinate. See assets/segmaps/ for the extraction and the data.
+ *
+ * Two results from that measurement, both worth knowing:
+ *
+ *   1. The whole Tamagotchi family shares one map. P1, P2, Angel and Mothra
+ *      produce byte-identical tables, so the E0C6S46 and E0C6S48 split above is
+ *      not a segment-mapping difference. Upstream's two arrays agree on
+ *      everything the 32x16 panel uses.
+ *
+ *   2. Digimon is wired differently, and upstream's table gets it wrong -
+ *      448 of 512 entries disagree. Rendering a Digimon ROM with the
+ *      Tamagotchi table gives a plausible but incorrect creature (47 lit
+ *      pixels, ragged outline); the measured map gives 65 and a coherent
+ *      shape. The measured map is corroborated 512/512 by an independent
+ *      derivation from the ROM's own disassembly
+ *      (willmcginnis/digimon-vpet-1997-disassembly, data/lcd_layout.json).
+ *
+ * Values are segment -> x. Any value >= LCD_WIDTH means "icon segment": the
+ * icon index is chosen by the seg == 8 / seg == 28 test below, so collapsing
+ * icon slots to 32 is safe.
+ */
 #if defined(E0C6S48_SUPPORT)
-/* 51 segments */
-static u8_t seg_pos[MEM_DISPLAY1_SIZE/2] = {0, 1, 2, 3, 4, 5, 6, 7, 32, 8, 9, 10, 11, 12 ,13 ,14, 15, 33, 34, 35, 31, 30, 29, 28, 27, 26, 25, 24, 36, 23, 22, 21, 20, 19, 18, 17, 16, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50};
+/* 51 segments; Tamagotchi family map, measured */
+static u8_t seg_pos[MEM_DISPLAY1_SIZE/2] = {
+	0, 1, 2, 3, 4, 5, 6, 7, 32, 8, 9, 10, 11, 12, 13, 14, 15, 32, 32, 32,
+	31, 30, 29, 28, 27, 26, 25, 24, 32, 23, 22, 21, 20, 19, 18, 17, 16
+};
 #elif defined(E0C6S46_SUPPORT)
-/* 40 segments */
-static u8_t seg_pos[MEM_DISPLAY1_SIZE/2] = {0, 1, 2, 3, 4, 5, 6, 7, 32, 8, 9, 10, 11, 12 ,13 ,14, 15, 33, 34, 35, 31, 30, 29, 28, 27, 26, 25, 24, 36, 23, 22, 21, 20, 19, 18, 17, 16, 37, 38, 39};
+/* 40 segments; same table, which is the point */
+static u8_t seg_pos[MEM_DISPLAY1_SIZE/2] = {
+	0, 1, 2, 3, 4, 5, 6, 7, 32, 8, 9, 10, 11, 12, 13, 14, 15, 32, 32, 32,
+	31, 30, 29, 28, 27, 26, 25, 24, 32, 23, 22, 21, 20, 19, 18, 17, 16
+};
 #endif
+
+/* Digimon uses a different segment order. Selected at runtime by
+ * hw_set_segmap() so one build can run either family. */
+/* Sized to MEM_DISPLAY1_SIZE/2 like seg_pos itself, and padded with 32 (icon)
+ * rather than left short: hw_set_lcd_pin() indexes this by `seg`, which runs to
+ * 39 or 50, so a 37-entry table would be read out of bounds. That showed up as
+ * devices halting at random addresses. */
+static const u8_t seg_pos_digimon[MEM_DISPLAY1_SIZE/2] = {
+	32, 31, 30, 29, 28, 27, 26, 25, 24, 32, 32, 32, 23, 22, 21, 20, 19, 18,
+	17, 16, 0, 1, 2, 3, 4, 5, 6, 7, 32, 8, 9, 10, 11, 12, 13, 14, 15,
+	32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32
+};
+
+static const u8_t *seg_pos_active = seg_pos;
+
+void hw_set_segmap(hw_segmap_t which)
+{
+	seg_pos_active = (which == HW_SEGMAP_DIGIMON) ? seg_pos_digimon : seg_pos;
+}
 
 bool_t hw_init(void)
 {
@@ -48,8 +97,8 @@ void hw_release(void)
 void hw_set_lcd_pin(u8_t seg, u8_t com, u8_t val)
 {
 	//printf("   hw_set_lcd_pin: seg = %u, com = %u, val = %u\n", seg, com, val);
-	if (seg_pos[seg] < LCD_WIDTH) {
-		g_hal->set_lcd_matrix(seg_pos[seg], com, val);
+	if (seg_pos_active[seg] < LCD_WIDTH) {
+		g_hal->set_lcd_matrix(seg_pos_active[seg], com, val);
 	} else {
 		/*
 		 * IC n -> seg-com|...

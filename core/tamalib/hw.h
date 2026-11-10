@@ -40,6 +40,15 @@ typedef enum {
 } button_t;
 
 
+/* Which segment map to use. The Tamagotchi family (P1, P2, Angel, Mothra) all
+ * share one; Digimon is wired differently. Measured, see assets/segmaps/. */
+typedef enum {
+	HW_SEGMAP_TAMAGOTCHI = 0,
+	HW_SEGMAP_DIGIMON = 1,
+} hw_segmap_t;
+
+void hw_set_segmap(hw_segmap_t which);
+
 bool_t hw_init(void);
 void hw_release(void);
 

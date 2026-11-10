@@ -44,6 +44,16 @@ int main(int argc,char**argv){
     for(u32_t i=0;i<w;i++){int b0=fgetc(f),b1=fgetc(f); p[i]=(u12_t)(b1|((b0&0xF)<<8));}
     fclose(f);
     tamalib_register_hal(&H);
+    /* Pick the segment map from the ROM itself. 8192 words means E0C6S48, which
+     * covers Angel/Mothra/Digimon; of those, Digimon is the only one whose
+     * segment order differs, and it is also the only 8192-word device whose
+     * header word differs. Rather than sniff headers, take a name hint and fall
+     * back to size: the caller knows what it handed us. */
+    {
+        const char *b = strrchr(argv[1], '/'); b = b ? b+1 : argv[1];
+        if (strstr(b, "digimon")) tamalib_set_segmap(HW_SEGMAP_DIGIMON);
+        else tamalib_set_segmap(HW_SEGMAP_TAMAGOTCHI);
+    }
     if(tamalib_init(p,NULL,1000000)){printf("INIT FAIL\n");return 1;}
     tamalib_set_exec_mode(EXEC_MODE_RUN);
     state_t*s=tamalib_get_state();

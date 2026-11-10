@@ -28,6 +28,8 @@
 
 #define tamalib_set_speed(speed)			cpu_set_speed(speed)
 
+#define tamalib_set_segmap(map)			hw_set_segmap(map)
+
 #define tamalib_get_state()				cpu_get_state()
 #define tamalib_refresh_hw()				cpu_refresh_hw()
 

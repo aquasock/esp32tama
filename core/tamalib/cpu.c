@@ -1938,7 +1938,12 @@ void cpu_release(void)
 int cpu_step(void)
 {
 	u12_t op;
-	u8_t i;
+	/* Initialised on purpose. When cpu_halted is set the lookup loop below
+	 * does not run, but `i` is still read by the interrupt-dispatch test
+	 * (`if (I && i != 0 && i != 58)`). Upstream leaves it uninitialised, so a
+	 * halted CPU's interrupt behaviour depended on stack garbage - which made
+	 * the same ROM halt at different addresses in different builds. */
+	u8_t i = 0;
 	breakpoint_t *bp = g_breakpoints;
 	static u8_t previous_cycles = 0;
 
