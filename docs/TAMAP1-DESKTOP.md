@@ -389,6 +389,51 @@ This is the sort of bug that only shows up on hardware that omits a register
 write. Worth remembering for any other device added later: a HAL default of zero
 is almost never the hardware default.
 
+## Alien Fever: wrong segment map and wrong panel width
+
+Mothra and the Digimon were fine, but Alien Fever rendered as scrambled dots. It
+is the only **non-Bandai** device here, and it needed two changes.
+
+**Ground truth from MAME** (`src/mame/handheld/hh_e0c6200.cpp`, `hh_e0c6200.cpp`
+line 355 onwards):
+
+```
+* Seiko Epson E0C6S46 MCU
+* 39*16 LCD screen, 1-bit sound
+* It's a Pachislot keychain game, the MCU constantly runs on the higher-speed OSC3.
+...
+screen.set_size(39, 16);
+```
+
+And the device's own display mapping (`src/devices/cpu/e0c6200/e0c6s46.cpp`):
+
+```c
+int seg = offset / 2;
+int com = bank * 8 + (offset & 1) * 4 + c;
+m_render_buf[com * width + seg] = pixel;   // x = seg, NO permutation
+```
+
+**Two findings:**
+
+1. **There is no segment permutation on hardware.** MAME lays the panel out as
+   `buffer[com * width + seg]` — x *is* the segment index. The Tamagotchi family
+   has a physical quirk that makes its x order non-identity (measured from its
+   artwork, 512/512), but devices following the plain layout need an identity
+   map. TamaLib has no such mode, so one was added: `HW_SEGMAP_IDENTITY`.
+
+2. **The panel is 39 wide, not 32.** `LCD_WIDTH` was a compile-time 32, baked
+   into the HAL bounds check and the frontend texture. It is now the widest
+   supported panel (40), with the *active* width coming from
+   `hw_get_pixel_width()` — 32 for the Tamagotchi family, 39 for Alien Fever.
+
+After both changes the title screen reads as clean letterforms ("…TB" is legible;
+the first glyph is a katakana-style shape) instead of scattered dots, and pressing
+buttons brings up the lower half of the panel: measured 50-76 lit pixels in rows
+8-15 once input starts. So it does use the full 39x16; it just idles on a logo.
+
+**The other seven devices are unchanged** — same lit counts before and after
+(84, 104, 76, 65, 73, 64), because their maps still treat values >= 32 as icons.
+
 ## Mothra logs out-of-range writes — and they are harmless
 
 Mothra emits 26 warnings per frame:

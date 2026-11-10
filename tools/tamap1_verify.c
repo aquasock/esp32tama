@@ -52,6 +52,7 @@ int main(int argc,char**argv){
     {
         const char *b = strrchr(argv[1], '/'); b = b ? b+1 : argv[1];
         if (strstr(b, "digimon")) tamalib_set_segmap(HW_SEGMAP_DIGIMON);
+        else if (strstr(b, "alienfev")) tamalib_set_segmap(HW_SEGMAP_IDENTITY);
         else tamalib_set_segmap(HW_SEGMAP_TAMAGOTCHI);
     }
     if(tamalib_init(p,NULL,1000000)){printf("INIT FAIL\n");return 1;}

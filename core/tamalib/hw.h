@@ -22,7 +22,10 @@
 
 #include "hal.h"
 
-#define LCD_WIDTH			32
+/* Widest panel of any supported device. The active width is per-device and
+ * reported by hw_get_pixel_width(): 32 for the Tamagotchi family, 39 for
+ * Alien Fever. */
+#define LCD_WIDTH			40
 #define LCD_HEIGHT			16
 
 #define ICON_NUM			8
@@ -45,9 +48,13 @@ typedef enum {
 typedef enum {
 	HW_SEGMAP_TAMAGOTCHI = 0,
 	HW_SEGMAP_DIGIMON = 1,
+	HW_SEGMAP_IDENTITY = 2,   /* x = segment index, for devices with no quirk */
 } hw_segmap_t;
 
 void hw_set_segmap(hw_segmap_t which);
+
+/* Active panel width for the current segment map: 32 or 39. */
+u8_t hw_get_pixel_width(void);
 
 bool_t hw_init(void);
 void hw_release(void);
