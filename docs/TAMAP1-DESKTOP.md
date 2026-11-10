@@ -648,3 +648,86 @@ alienfev.bin: not supported.
   Alien Fever needs a 39-wide panel; Stack Challenge is a segmented
   LCD with artwork rather than a dot matrix. See docs/TAMAP1-DESKTOP.md.
 ```
+
+---
+
+# The four untested devices: do their ROMs exist?
+
+Researched 2026-11-09. Short answer: **three of the four have been dumped and
+exist in the community, but none are published in a form you can just download.
+The fourth (Tamaotch) was reportedly dumped but is not in any emulator yet.**
+
+## What TamaLib expects
+
+From its README, all four are **E0C6S48** at 32,768 Hz + 1 MHz, all **32×16 with
+8 icons** — the same display model as the six devices that already work. So no
+code change would be needed beyond a segment map.
+
+## Where they are not
+
+**MAME 0.289** — checked its full 63,685-zip non-merged set and its current
+`hh_e0c6200.cpp`. It has ten E0C6xxx machines: `tama`, `tamag2`, `tamaang`,
+`tamamot`, `digimon`, `digimonv2`, `digimonv3`, `alienfev`, `venusdm` (Nikko
+Beans Collection) and `stackch`. **None of the four are there**, and neither is
+`venusdm`'s ROM in the set I have.
+
+**BrickEmuPy** — this is the significant one. It lists, in its own README:
+
+```
+* Tamagotchi Umino (distributed without ROM)
+* Tamagotchi Morino (distributed without ROM)
+* Tamagotchi Genjintch (distributed without ROM)
+* Tamagotchi Yasashii (distributed without ROM)
+```
+
+So azya has the *device definitions* for three of our four, and the phrase
+"distributed without ROM" is explicit: the emulator ships, the ROM does not.
+Verified by cloning the repo — `assets/TamagotchiUmino.brick` exists and points
+at `./assets/TamagotchiUmino.bin`, and **no Tamagotchi `.bin` is present**.
+
+Note BrickEmuPy lists **Yasashii** as a fifth device rather than Tamaotch.
+
+## Where they are
+
+**The ROMs were decapsulated and dumped.** azya reported this publicly:
+
+> "The ROMs for Tamaotch, Yasashii, and Genjintch were also decapsulated and
+> dumped. If you have high-quality photos of these Tamagotchi, it would help me
+> a lot."
+
+(decap = the epoxy package is dissolved and the ROM mask read optically, the same
+route the P1 took via <https://siliconpr0n.org/map/bandai/tamagotchi-v1/>.)
+
+So they exist in at least one person's hands. They are simply not redistributed,
+for the obvious reason — the same reason this repository ships none either.
+
+**The artwork IS available.** BrickEmuPy ships the SVG faces:
+`TamagotchiUmino.svg`, `TamagotchiMorino.svg`, `TamagotchiGenjintch.svg`,
+`TamagotchiYasashii.svg`.
+
+## What that means in practice
+
+| Device | ROM dumped? | Published? | Artwork available? |
+|---|---|---|---|
+| Umino (Ocean) | yes | no | yes |
+| Morino (Forest) | yes | no | yes |
+| Genjintch | yes | no | yes |
+| Tamaotch | yes (reported) | no | not in BrickEmuPy |
+
+**None can be verified by this project today.** Getting them means asking in the
+community — azya has the dumps — not downloading.
+
+**I tried to pre-extract the segment maps from the artwork and could not do it
+reliably.** Those four SVGs use a different path syntax from the Bandai ones
+(uppercase absolute commands, space-separated, no rectangle shorthand), and my
+first-point heuristic put the icons in the bounding box, giving implausible grids
+(34×18, 36×20 instead of 32×16). Rather than commit a wrong map I deleted the
+extractions. The method is sound — it needs a real path parser, which is the same
+subsystem Stack Challenge would need.
+
+## Recommendation
+
+Treat them as **supported-but-untested**, which is what the docs already say, and
+leave it. If a dump ever turns up, the work is: extract its segment map properly,
+add it to `assets/segmaps/`, and verify against the six-device harness. That is a
+couple of hours, not a project.
