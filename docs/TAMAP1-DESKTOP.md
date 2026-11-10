@@ -245,3 +245,71 @@ Dereference them.
 TamaLib is copyright (C) 2021 Jean-Christophe Rona, GPL-2.0-or-later. See
 `ATTRIBUTIONS.md`. The device documentation it is based on is linked from its
 README; the E0C6S46/48 technical manual is public from Epson.
+
+---
+
+# Correction: the missing ROMs exist, and MAME has them
+
+An earlier note on this page said "no MAME torrent, of any version, will have
+them", on the basis that MAME 0.261 emulated exactly one Tamagotchi machine.
+**That was wrong.** MAME added them in **0.274** (2025-01-31).
+
+From `whatsnew_0274.txt`, under *New working systems*, all by `hap` and `azya`:
+
+```
+Bandai Digital Monster (Japan)              Digimon V1
+Bandai Digital Monster Ver. 2 (Japan)       Digimon V2
+Bandai Digital Monster Ver. 3 (Japan)       Digimon V3
+Bandai Mothra no Tamagotchi (Japan)         Mothra
+Bandai Tamagotchi (Gen. 2, Japan)           P2          <-- the one we wanted
+Bandai Tenshitchi no Tamagotchi (Japan)     Angel       <-- and this
+Epoch Chibi Pachi: Alien Fever              AlienFever
+Tandy Corporation Stack Challenge           Stack Challenge
+```
+
+Note `azya` in the credits — the same author whose BrickEmuPy this project
+already ports. The first-generation devices were reverse-engineered by the same
+person whose work is the basis of everything here.
+
+## Where they are
+
+`archive.org/details/mame-roms-non-merged` is a live **MAME 0.289 non-merged**
+set, 63,685 zips. The relevant members:
+
+| MAME zip | Device | Size |
+|---|---|---|
+| `tamag2.zip` | **Tamagotchi Gen 2 — P2** | 19,441 B |
+| `tamaang.zip` | **Tenshitchi no Tamagotchi — Angel** | 23,721 B |
+| `tamamot.zip` | Mothra no Tamagotchi | 23,633 B |
+| `digimon.zip` | Digital Monster V1 | 26,904 B |
+| `digimonv2.zip` | Digital Monster Ver. 2 | 26,942 B |
+| `digimonv3.zip` | Digital Monster Ver. 3 | 27,119 B |
+| `alienfev.zip` | Chibi Pachi Alien Fever | 7,034 B |
+| `stackch.zip` | Stack Challenge | 15,103 B |
+| `tama.zip` | Tamagotchi (USA) — P1, the one we have | 20,087 B |
+
+## What this means for the emulator
+
+**The P2 needs no code change.** It is the same E0C6S46 at 32,768 Hz with the
+same 32×16 display, and TamaLib already compiles for it — no work beyond dropping
+the ROM in.
+
+**Angel and Mothra use the E0C6S48** (32,768 Hz plus a 1 MHz oscillator), which
+is also already compiled in this build. They may need the icon set checked, since
+the segment map for the S48 is the 51-entry one, but the code path exists.
+
+So the "eight devices" claim becomes testable rather than aspirational: three of
+the missing ones are now a download away, and none of them require writing code.
+
+## Two caveats
+
+**These are copyrighted ROMs.** Nothing from them goes in this repository. They
+are the operator's to obtain and hold, exactly as with the P1 and the Pokémon
+Mini cartridges.
+
+**A MAME zip is not the raw ROM.** Each `.zip` contains the device's ROM image
+under MAME's own naming, possibly alongside other files. Extract the `.bin` and
+check its size: a first-gen device ROM is **12,288 bytes / 6,144 words**, stored
+two bytes per 12-bit word with the high nibble unused — the same format the
+loader already handles. If a size differs, say so, because it would mean the
+format changed and the loader needs looking at.
