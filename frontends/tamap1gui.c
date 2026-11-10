@@ -120,7 +120,13 @@ static void hal_set_lcd_icon(u8_t icon, bool_t val)
 
 /* Buzzer. TamaLib reports a frequency in deci-Hz; we synthesise a square wave
  * from it at the mixer callback. */
-static u32_t g_buzz_freq_dhz;
+/* Deci-Hz. Initialised to the hardware reset value, which is frequency code 0 =
+ * 4096 Hz (see hw_set_buzzer_freq case 0). Leaving this at 0 meant "silent", and
+ * that silenced every device which enables the buzzer without ever writing the
+ * frequency register - Digimon does exactly that: it toggles the enable port at
+ * 0xF54 and never touches 0xF74. On real hardware an unset frequency register
+ * means the reset default, not silence. */
+static u32_t g_buzz_freq_dhz = 40960;
 static volatile int g_buzz_on;
 static double g_phase;
 

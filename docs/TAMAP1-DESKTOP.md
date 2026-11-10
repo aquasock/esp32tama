@@ -344,6 +344,51 @@ of another; each is its own device.
 words (12,288 B); Angel/Mothra/Digimon are 8,192 words (16,384 B). The
 13-bit PC in TamaLib (`& 0x1FFF`) covers both, and no code change was needed.
 
+## Digimon was silent — and that was a frontend bug
+
+Reported after the Digimon runs: neither game had sound. Worth checking, because
+the segment-map fix only touched `set_lcd_matrix` and cannot affect audio.
+
+Instrumenting register writes explains it. Comparing what each device sends:
+
+```
+P2      writes R74 <- 3   (BUZZER_CTRL1)  and R75
+Digimon writes R54        (buzzer enable)  but never R74
+```
+
+So Digimon **enables** the buzzer without ever **setting a frequency**. On real
+hardware an unset frequency register means the reset default — frequency code 0,
+4096 Hz. My frontend initialised `g_buzz_freq_dhz` to **0** and its audio
+callback treats 0 as silence:
+
+```c
+if (!g_buzz_on || g_buzz_freq_dhz == 0) { silence; }
+```
+
+So Digimon called `play_frequency(true)` and got nothing. Every device that sets
+its frequency explicitly worked; the one that relies on the default was muted.
+
+Fixed by initialising to the hardware reset value, `40960` deci-Hz = 4096 Hz.
+Measured after the fix, over 5M steps:
+
+```
+device     buzzer on     frequency
+digimon       0.2 %      4096 Hz
+digimonv2     0.2 %      4096 Hz
+tamag2        0.2 %      2340 Hz
+tamaang       0.4 %      2340 Hz
+```
+
+**To answer the question directly: no, the egg is not supposed to hold a tone.**
+The buzzer is on for about 0.2 % of the time — a short beep at startup, not a
+continuous sound. Digimon's beep is ~0.37 s and P2's ~0.24 s. Anything that
+sustains a tone is a fault; anything silent when the device enables the buzzer
+is also a fault, which is what this was.
+
+This is the sort of bug that only shows up on hardware that omits a register
+write. Worth remembering for any other device added later: a HAL default of zero
+is almost never the hardware default.
+
 ## Mothra logs out-of-range writes — and they are harmless
 
 Mothra emits 26 warnings per frame:
