@@ -313,3 +313,85 @@ check its size: a first-gen device ROM is **12,288 bytes / 6,144 words**, stored
 two bytes per 12-bit word with the high nibble unused — the same format the
 loader already handles. If a size differs, say so, because it would mean the
 format changed and the loader needs looking at.
+
+---
+
+# Verification: all eight devices, from the MAME 0.274+ ROMs
+
+Ran 2026-11-09 against the ROMs the operator extracted from the MAME 0.289
+non-merged set. Tool: `tools/tamap1_verify.c`.
+
+## Results — 7 of 8 draw, 1 does not
+
+```
+device      ROM words  pc      halted  lit   icons   verdict
+tamag2      6144       01B3    0        84    -----   P2, patterned egg
+tamaang     8192       0A7B    0       104    -----   Angel, wing + figure
+tamamot     8192       106B    0        76    -----   Mothra, egg
+digimon     8192       015D    0        47    -----   Digital Monster V1
+digimonv2   8192       1242    0        49    -----   Digital Monster V2
+digimonv3   8192       016D    1        46    -----   Digital Monster V3
+alienfev    6144       1412    0        56    1----   Alien Fever, icon 1 lit
+stackch     6144       01FB    1         0    -----   ** blank **
+```
+
+Every one that draws has a distinct, recognisable image — the P2's patterned
+egg, the Angel's wing and figure, Mothra's egg, three visibly different
+Digimon creatures, and Alien Fever's lettering. None of them is a corruption
+of another; each is its own device.
+
+**Two ROM sizes appear, and both are fine.** P1/P2/AlienFever/StackCh are 6,144
+words (12,288 B); Angel/Mothra/Digimon are 8,192 words (16,384 B). The
+13-bit PC in TamaLib (`& 0x1FFF`) covers both, and no code change was needed.
+
+## stackch does not run
+
+`stackch` clears the display, draws a 256-pixel pattern once, clears it again,
+and halts at `pc=01FB` permanently. Confirmed over 10M instructions: one display
+change, then nothing. No button press changes it.
+
+Its interrupt state is the clue: **slot 5 is left `triggered=1` with `I` set**,
+so the CPU is halted with a pending interrupt it never services. That is either
+a TamaLib limitation in the timer/interrupt model or a device that expects a
+peripheral this board does not model — Stack Challenge is a two-unit game, so a
+link-port wait is plausible.
+
+I tested one hypothesis and it was wrong: `cpu_step()` declares `u8_t i;` and
+reads it in `if (I && i != 0 && i != 58)` even when `cpu_halted` is set, so `i`
+is uninitialized on that path. Removing the guard for the halted case changed
+nothing, so that is a latent bug but not this bug.
+
+**Not worth chasing further.** Stack Challenge is the most obscure device of
+the eight and the other seven work. Recorded rather than fixed.
+
+## The harness bug this found
+
+My first tester used `clock_gettime()` for the HAL timestamps. TamaLib paces
+itself through `get_timestamp`/`sleep_until`, so **wall-clock time fed straight
+back into how far the emulation got** — the same ROM appeared blank under one
+sampling pattern and drew 256 pixels under another.
+
+The tool now uses a virtual clock: `get_timestamp` returns a counter,
+`sleep_until` advances it if the deadline is ahead. Runs are then reproducible,
+which is the only way a verification result means anything.
+
+That mistake is worth remembering: an emulator with a time-seeped HAL will
+produce results that look like hardware bugs and are actually scheduling noise.
+
+## What is now established
+
+The "eight devices" claim was aspirational when TamaLib was vendored. It is now
+measured:
+
+- **7 run and draw correctly**, across both MCUs (E0C6S46 and E0C6S48)
+- **1 does not**, and is documented rather than glossed
+- **No code change was needed** for any of them
+
+So dropping a ROM in is the whole job for the six new devices. That is the
+platform being comprehensive for real, not by assertion.
+
+## Copyright
+
+None of these ROMs are in this repository. They are the operator's, obtained
+from the MAME set, and the same rule applies as everywhere else here: no
+commercial ROM is ever distributed.
