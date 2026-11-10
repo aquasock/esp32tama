@@ -389,6 +389,51 @@ This is the sort of bug that only shows up on hardware that omits a register
 write. Worth remembering for any other device added later: a HAL default of zero
 is almost never the hardware default.
 
+## Stack Challenge: a segmented LCD, not a dot matrix
+
+Stack Challenge is the one device of the eight that this emulator **cannot**
+render, and the reason is architectural rather than a bug.
+
+**The ROM is correct.** Ours is byte-identical to MAME's
+(`crc=28b9310a sha1=52b80d70aa7f`), and the CPU runs normally: it writes display
+segments continuously (840 → 1120 → 1400 calls) while waiting on interrupts.
+
+**The display is not a pixel matrix.** MAME's `hh_e0c6200.cpp`:
+
+```
+* 10*21 LCD screen + custom segments, 1-bit sound
+* It's a brick game clone.
+```
+
+and it renders this device through `SCREEN_SVG` at **856 x 1080** using artwork
+loaded from a 133,022-byte `screen` ROM region. We have that artwork
+(`stackch.svg`, exactly 133,022 bytes, matching MAME's region).
+
+Measured from the artwork:
+
+```
+278 seg_com shapes
+ 76 distinct segment indexes
+  4 max commons per segment
+```
+
+A 10x21 dot matrix would need 10 segment lines carrying 21 commons each. Here
+there are 76 segment lines carrying at most 4. **Each (seg, com) is one bespoke
+artwork shape** — a brick, a bar, a digit stroke — not a dot.
+
+TamaLib models exactly the opposite: one (seg, com) intersection per pixel, in a
+32-wide by 16-high matrix. Stack Challenge does not fit that model at any width.
+
+**What rendering it would take:** an artwork renderer. Parse the SVG's 271 paths
+(1151 subpaths, rectilinear plus a few curves), rasterise each of the 278 shapes,
+and composite the lit ones per frame — which is precisely what MAME's
+`SCREEN_SVG` does. It is a new subsystem, not a mapping fix, and it is
+disproportionate for one obscure brick-game clone when the other seven devices
+work as dot matrices.
+
+**Recorded rather than attempted.** The artwork is on hand and the approach is
+clear; it is a scope decision, not a blocker.
+
 ## Alien Fever: wrong segment map and wrong panel width
 
 Mothra and the Digimon were fine, but Alien Fever rendered as scrambled dots. It
