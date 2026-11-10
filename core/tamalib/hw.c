@@ -81,44 +81,16 @@ static const u8_t *seg_pos_active = seg_pos;
  * egg upside down, which is exactly the mistake not to make here. */
 static u8_t seg_com_flip = 0;
 
-/* Active panel width. 32 for the Tamagotchi family, 39 for Alien Fever. Kept
- * separate from LCD_WIDTH, which is now the widest supported panel, so the
- * Tamagotchi maps keep treating seg_pos values >= 32 as icons. */
-static u8_t seg_pixel_width = 32;
-
-u8_t hw_get_pixel_width(void) { return seg_pixel_width; }
-
-/* Identity map: x = segment index, no permutation.
- *
- * MAME's e0c6s46_device::screen_update() lays the panel out as
- *   render_buf[com * width + seg]
- * where width is the segment count. So on hardware x is simply the segment
- * index and there is no lookup table at all. The Tamagotchi devices have a
- * physical quirk that makes their x order non-identity - measured from their
- * artwork - but devices that follow the plain layout need this instead.
- *
- * Alien Fever is the case in point: MAME describes it as a 39x16 panel, and
- * drawing it through the 32-wide Tamagotchi permutation scrambles it. */
-static u8_t seg_pos_identity[MEM_DISPLAY1_SIZE/2];
+/* No identity map: every supported device has a measured permutation. */
 
 void hw_set_segmap(hw_segmap_t which)
 {
-	if (which == HW_SEGMAP_IDENTITY) {
-		for (u8_t i = 0; i < sizeof(seg_pos_identity); i++)
-			seg_pos_identity[i] = i;
-		seg_pos_active = seg_pos_identity;
-		seg_com_flip = 0;
-		seg_pixel_width = 39;   /* Alien Fever: 39x16, MAME hh_e0c6200.cpp */
-		return;
-	}
 	if (which == HW_SEGMAP_DIGIMON) {
 		seg_pos_active = seg_pos_digimon;
 		seg_com_flip = 1;
-		seg_pixel_width = 32;
 	} else {
 		seg_pos_active = seg_pos;
 		seg_com_flip = 0;
-		seg_pixel_width = 32;
 	}
 }
 
@@ -140,7 +112,7 @@ void hw_release(void)
 void hw_set_lcd_pin(u8_t seg, u8_t com, u8_t val)
 {
 	//printf("   hw_set_lcd_pin: seg = %u, com = %u, val = %u\n", seg, com, val);
-	if (seg_pos_active[seg] < seg_pixel_width) {
+	if (seg_pos_active[seg] < LCD_WIDTH) {
 		g_hal->set_lcd_matrix(seg_pos_active[seg],
 		                        seg_com_flip ? (LCD_HEIGHT - 1 - com) : com, val);
 	} else {

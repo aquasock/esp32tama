@@ -51,9 +51,12 @@ int main(int argc,char**argv){
      * back to size: the caller knows what it handed us. */
     {
         const char *b = strrchr(argv[1], '/'); b = b ? b+1 : argv[1];
-        if (strstr(b, "digimon")) tamalib_set_segmap(HW_SEGMAP_DIGIMON);
-        else if (strstr(b, "alienfev")) tamalib_set_segmap(HW_SEGMAP_IDENTITY);
-        else tamalib_set_segmap(HW_SEGMAP_TAMAGOTCHI);
+        if (strstr(b, "alienfev") || strstr(b, "stackch")) {
+            fprintf(stderr, "%s: not supported (see docs/TAMAP1-DESKTOP.md)\n", b);
+            return 2;
+        }
+        tamalib_set_segmap(strstr(b, "digimon") ? HW_SEGMAP_DIGIMON
+                                               : HW_SEGMAP_TAMAGOTCHI);
     }
     if(tamalib_init(p,NULL,1000000)){printf("INIT FAIL\n");return 1;}
     tamalib_set_exec_mode(EXEC_MODE_RUN);

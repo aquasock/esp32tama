@@ -80,14 +80,22 @@ These are virtual pets, not cartridge games: each device has one built-in
 program in mask ROM. "Support" means the emulator reproduces that device's
 hardware, so supplying its ROM is the whole job — there is no per-game code.
 
-TamaLib covers **eight devices across two MCUs** (from its README):
+**Supported here: six devices across two MCUs.** TamaLib covers eight; the two
+dropped ones are documented under *Scope* at the end of this page.
 
-| MCU | Devices | Clock |
+| MCU | Devices | Status |
 |---|---|---|
-| **E0C6S46** | Tamagotchi **P1**, Tamagotchi **P2** | 32,768 Hz |
-| **E0C6S48** | Tamagotchi **Angel**, **Umino** (Ocean), **Morino** (Forest), **Mothra**, **Tamaotch**, **Genjintch** | 32,768 Hz and 1 MHz |
+| **E0C6S46** | Tamagotchi **P1**, **P2** | supported, verified |
+| **E0C6S48** | Tamagotchi **Angel**, **Mothra** | supported, verified |
+| **E0C6S48** | Digimon **V1**, **V2**, **V3** | supported, verified, needs its own segment map |
+| E0C6S46 | *Alien Fever* | **dropped** — 39-wide panel |
+| E0C6S46 | *Stack Challenge* | **dropped** — segmented LCD, not a dot matrix |
 
-All eight are 32×16 monochrome with 8 icons.
+Every supported device is 32×16 monochrome with 8 icons, which is why one
+display model covers all six. TamaLib also lists **Umino/Ocean, Morino/Forest,
+Tamaotch and Genjintch**; those should work on the same code path but no ROM was
+available to verify them, so they are supported-but-untested rather than
+claimed.
 
 How much of that is actually exercised here:
 
@@ -602,3 +610,41 @@ platform being comprehensive for real, not by assertion.
 None of these ROMs are in this repository. They are the operator's, obtained
 from the MAME set, and the same rule applies as everywhere else here: no
 commercial ROM is ever distributed.
+
+---
+
+# Scope
+
+**Supported: six devices.** Tamagotchi P1, P2, Angel, Mothra and Digimon V1-V3.
+These share one display model — a 32×16 dot matrix with 8 icons — and all six
+were verified by the operator in play, not just by headless test.
+
+**Dropped: two.** Both were investigated to the point of a firm diagnosis and
+then deliberately excluded, because each would need a subsystem that benefits
+one obscure device.
+
+**Alien Fever** (Epoch, 1997). Needs a 39-wide panel and an identity segment
+map, both of which were implemented and worked. It is dropped as a *scope*
+decision rather than a technical failure: it is a Pachislot keychain game, and
+supporting it meant a per-device panel width threaded through the HAL, the
+frontend texture sizing and the window geometry. Reverted so the six supported
+devices keep one simple display path. The analysis is preserved above if it is
+ever wanted back.
+
+**Stack Challenge** (Tandy, 1991). Cannot be rendered at all. MAME describes it
+as a *segmented* LCD — 278 bespoke artwork shapes across 76 segment lines with at
+most 4 commons each — not a dot matrix. TamaLib models one (seg, com)
+intersection per pixel, so no width or mapping change can express it. It would
+need an SVG artwork renderer, which is what MAME's `SCREEN_SVG` is. Not attempted.
+
+**What the frontend does with them now:** refuses them by name and prints the
+supported list, rather than rendering scrambled dots and leaving the user to
+wonder whether the emulator or the ROM is at fault.
+
+```
+$ ./tamap1 alienfev.bin
+alienfev.bin: not supported.
+  Supported devices: Tamagotchi P1/P2/Angel/Mothra, Digimon V1-V3.
+  Alien Fever needs a 39-wide panel; Stack Challenge is a segmented
+  LCD with artwork rather than a dot matrix. See docs/TAMAP1-DESKTOP.md.
+```

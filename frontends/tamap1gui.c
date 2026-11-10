@@ -39,16 +39,12 @@
 #define ICON_CELL       5             /* icon cell size in panel pixels */
 #define GAP              2             /* bezel around the panel, panel pixels */
 
-/* Panel geometry is per-device at run time: 32 dots for the Tamagotchi family,
- * 39 for Alien Fever. LCD_WIDTH is the widest supported, so the buffers below
- * are sized for the maximum and the active width comes from hw_get_pixel_width(). */
-#define PANEL_W_MAX (LCD_W * ICON_CELL)
-#define PANEL_H     (LCD_H * ICON_CELL + ICON_CELL * 2)
-#define TEX_W_MAX   (PANEL_W_MAX + GAP * 2)
-#define TEX_H       (PANEL_H + GAP * 2)
-
-static int g_panel_w;      /* active panel width in panel pixels */
-static int g_tex_w, g_tex_h;
+/* Panel: 32x16 dots plus a strip of icons beneath. Every supported device uses
+ * this geometry - the Tamagotchi family and Digimon alike. */
+#define PANEL_W  (LCD_W * ICON_CELL)                 /* 160 */
+#define PANEL_H  (LCD_H * ICON_CELL + ICON_CELL * 2) /* 96 */
+#define TEX_W    (PANEL_W + GAP * 2)
+#define TEX_H    (PANEL_H + GAP * 2)
 
 #define COL_ON     0xFF1A1A1Eu
 #define COL_OFF    0xFFC9C9BEu
@@ -211,12 +207,12 @@ static SDL_Window   *g_win;
 static SDL_Renderer *g_ren;
 static SDL_Texture  *g_tex;
 static int           g_scale = DEFAULT_SCALE;
-static uint32_t      g_px[TEX_W_MAX * TEX_H];
+static uint32_t      g_px[TEX_W * TEX_H];
 
 static void put(int x, int y, uint32_t c)
 {
-    if (x < 0 || y < 0 || x >= g_tex_w || y >= g_tex_h) return;
-    g_px[y * g_tex_w + x] = c;
+    if (x < 0 || y < 0 || x >= TEX_W || y >= TEX_H) return;
+    g_px[y * TEX_W + x] = c;
 }
 
 static void fill(int x0, int y0, int w, int h, uint32_t c)
@@ -228,11 +224,11 @@ static void fill(int x0, int y0, int w, int h, uint32_t c)
 
 static void hal_update_screen(void)
 {
-    fill(0, 0, g_tex_w, g_tex_h, COL_BEZEL);
+    fill(0, 0, TEX_W, TEX_H, COL_BEZEL);
 
     /* Dot matrix, each dot ICON_CELL square. */
     for (int y = 0; y < LCD_H; y++) {
-        for (int x = 0; x < g_panel_w / ICON_CELL; x++) {
+        for (int x = 0; x < LCD_W; x++) {
             int px = GAP + x * ICON_CELL;
             int py = GAP + y * ICON_CELL;
             fill(px, py, ICON_CELL - 1, ICON_CELL - 1,
@@ -245,12 +241,12 @@ static void hal_update_screen(void)
      * glance. Their real shapes are bespoke artwork and are not reproduced. */
     int iy = GAP + LCD_H * ICON_CELL + 2;
     for (int i = 0; i < ICON_N; i++) {
-        int ix = GAP + i * (g_panel_w / ICON_N) + 2;
-        int iw = (g_panel_w / ICON_N) - 5;
+        int ix = GAP + i * (PANEL_W / ICON_N) + 2;
+        int iw = (PANEL_W / ICON_N) - 5;
         fill(ix, iy, iw, ICON_CELL - 2, g_icons[i] ? COL_ON : COL_ICON_BG);
     }
 
-    SDL_UpdateTexture(g_tex, NULL, g_px, g_tex_w * (int)sizeof(uint32_t));
+    SDL_UpdateTexture(g_tex, NULL, g_px, TEX_W * (int)sizeof(uint32_t));
     SDL_RenderClear(g_ren);
     SDL_RenderCopy(g_ren, g_tex, NULL, NULL);
     SDL_RenderPresent(g_ren);
@@ -258,20 +254,17 @@ static void hal_update_screen(void)
 
 static void display_init(void)
 {
-    g_panel_w = hw_get_pixel_width() * ICON_CELL;
-    g_tex_w = g_panel_w + GAP * 2;
-    g_tex_h = TEX_H;
     SDL_InitSubSystem(SDL_INIT_VIDEO);
     g_win = SDL_CreateWindow("Tamagotchi P1",
                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             g_tex_w * g_scale, g_tex_h * g_scale,
+                             TEX_W * g_scale, TEX_H * g_scale,
                              SDL_WINDOW_RESIZABLE);
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED);
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, 0);
-    SDL_RenderSetLogicalSize(g_ren, g_tex_w, g_tex_h);
+    SDL_RenderSetLogicalSize(g_ren, TEX_W, TEX_H);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888,
-                              SDL_TEXTUREACCESS_STREAMING, g_tex_w, g_tex_h);
+                              SDL_TEXTUREACCESS_STREAMING, TEX_W, TEX_H);
     SDL_SetTextureScaleMode(g_tex, SDL_ScaleModeNearest);
 }
 
@@ -313,14 +306,26 @@ int main(int argc, char **argv)
     {
         const char *base = strrchr(argv[1], '/');
         base = base ? base + 1 : argv[1];
+        /* Supported: the Tamagotchi family and Digimon. Two other E0C6xxx
+         * devices were investigated and deliberately dropped - Alien Fever is a
+         * 39-wide panel needing an identity segment map, and Stack Challenge is
+         * a segmented LCD with bespoke artwork rather than a dot matrix, so it
+         * cannot be drawn by this core at all. Refuse them by name rather than
+         * rendering scrambled dots and leaving the user to guess. */
+        if (strstr(base, "alienfev") || strstr(base, "stackch")) {
+            fprintf(stderr,
+                "%s: not supported.\n"
+                "  Supported devices: Tamagotchi P1/P2/Angel/Mothra, Digimon V1-V3.\n"
+                "  Alien Fever needs a 39-wide panel; Stack Challenge is a segmented\n"
+                "  LCD with artwork rather than a dot matrix. See docs/TAMAP1-DESKTOP.md.\n",
+                base);
+            return 2;
+        }
         const char *mapname = "tamagotchi";
         hw_segmap_t map = HW_SEGMAP_TAMAGOTCHI;
         if (strstr(base, "digimon")) { map = HW_SEGMAP_DIGIMON; mapname = "digimon"; }
-        else if (strstr(base, "alienfev")) { map = HW_SEGMAP_IDENTITY; mapname = "identity (39 wide)"; }
-        for (int i = 2; i < argc; i++) {
+        for (int i = 2; i < argc; i++)
             if (!strcmp(argv[i], "--digimon")) { map = HW_SEGMAP_DIGIMON; mapname = "digimon"; }
-            if (!strcmp(argv[i], "--identity")) { map = HW_SEGMAP_IDENTITY; mapname = "identity (39 wide)"; }
-        }
         tamalib_set_segmap(map);
         fprintf(stderr, "segmap: %s\n", mapname);
     }
@@ -373,7 +378,7 @@ int main(int argc, char **argv)
                     g_scale += (k == SDLK_F2) ? 2 : -2;
                     if (g_scale < 2) g_scale = 2;
                     if (g_scale > 40) g_scale = 40;
-                    SDL_SetWindowSize(g_win, g_tex_w * g_scale, g_tex_h * g_scale);
+                    SDL_SetWindowSize(g_win, TEX_W * g_scale, TEX_H * g_scale);
                     continue;
                 }
                 key_event(k, down);
