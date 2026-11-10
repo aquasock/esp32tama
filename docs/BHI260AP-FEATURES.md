@@ -27,8 +27,9 @@ whether any of this is worth having:
 | Game rotation vector @25 Hz | 1,068 | 25.6 | 179 |
 | Rotation vector (9DoF) @25 Hz | 1,126 | 26.3 | 184 |
 
-All at Long Run (20 MHz), which is the mode these run in. Turbo is barely
-different for the event-driven features — 0.98× more for step counting.
+All at Long Run (20 MHz), which is the mode these run in. Turbo (50 MHz) costs
+only 4 % more for the event-driven features — 0.102 mA against 0.098 for step
+counting — because they sleep between events and never need the clock.
 
 For scale: **ESP32-S3 deep sleep is about 10–20 µA** (0.24–0.48 mAh/day). So the
 cheapest useful features here cost roughly 2–4× what sleeping costs, and the
