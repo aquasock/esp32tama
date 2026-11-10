@@ -63,10 +63,32 @@ Digimon SVG map vs Digimon disassembly layout:  exact 512 / 512
 Two completely independent derivations agree exactly. **TamaLib's table is the
 outlier.**
 
+## Commons run opposite ways on Digimon
+
+Adding the maps exposed a second difference that the x-only `seg_pos` table cannot
+express. Comparing each stored `y` against the `com` TamaLib derives:
+
+```
+p1.json       y == com      512 / 512
+angel.json    y == com      512 / 512
+digimon.json  y == 15 - com 512 / 512
+```
+
+So **Digimon's commons are numbered upside down relative to the Tamagotchi
+family.** Rendering it with the unflipped axis gives a correct-looking but
+inverted creature - the egg stands on its point.
+
+This is deliberately a *per-device* flag (`seg_com_flip` in `hw.c`), not a
+global flip. Flipping everywhere would turn the Tamagotchi egg upside down,
+which is what a naive "the image is inverted" fix would have done.
+
 ## Using these
 
 `core/tamalib/hw.c` hardcodes `seg_pos` at compile time. To use a measured map,
-replace that array. The values are `segment -> x`, with any value `>= 32`
+replace that array. The values are `segment -> x` — the y axis is not stored, because TamaLib derives
+`com` itself. For Digimon that derivation is inverted; see above.
+
+Values are `segment -> x`, with any value `>= 32`
 meaning "this is an icon segment, not a pixel"; the icon index is chosen
 separately by `seg == 8` / `seg == 28`, so collapsing icon slots to 32 is safe.
 

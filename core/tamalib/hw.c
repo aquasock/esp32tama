@@ -74,9 +74,22 @@ static const u8_t seg_pos_digimon[MEM_DISPLAY1_SIZE/2] = {
 
 static const u8_t *seg_pos_active = seg_pos;
 
+/* Some devices number their commons the other way up. Digimon does: measured
+ * over all 512 segment bits, its panel coordinate is exactly 15 - com, while
+ * the Tamagotchi family's is exactly com. So this is a per-device axis
+ * inversion, not a global one - flipping everywhere would turn the Tamagotchi
+ * egg upside down, which is exactly the mistake not to make here. */
+static u8_t seg_com_flip = 0;
+
 void hw_set_segmap(hw_segmap_t which)
 {
-	seg_pos_active = (which == HW_SEGMAP_DIGIMON) ? seg_pos_digimon : seg_pos;
+	if (which == HW_SEGMAP_DIGIMON) {
+		seg_pos_active = seg_pos_digimon;
+		seg_com_flip = 1;
+	} else {
+		seg_pos_active = seg_pos;
+		seg_com_flip = 0;
+	}
 }
 
 bool_t hw_init(void)
@@ -98,7 +111,8 @@ void hw_set_lcd_pin(u8_t seg, u8_t com, u8_t val)
 {
 	//printf("   hw_set_lcd_pin: seg = %u, com = %u, val = %u\n", seg, com, val);
 	if (seg_pos_active[seg] < LCD_WIDTH) {
-		g_hal->set_lcd_matrix(seg_pos_active[seg], com, val);
+		g_hal->set_lcd_matrix(seg_pos_active[seg],
+		                        seg_com_flip ? (LCD_HEIGHT - 1 - com) : com, val);
 	} else {
 		/*
 		 * IC n -> seg-com|...
