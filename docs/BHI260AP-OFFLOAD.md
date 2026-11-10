@@ -220,3 +220,118 @@ The two things worth investigating, in order:
 2. **Would Bosch give you the SDK?** Only relevant if answer 1 is no and you need
    custom on-chip logic. That is the gate, and it is a commercial question before
    it is an engineering one.
+
+---
+
+# Addendum: would max I2C speed change anything?
+
+Asked directly, and the answer is **no — not for the IMU, and not in a way that
+helps.** The reasoning is worth writing down because it closes the question
+rather than leaving it hanging.
+
+## The IMU was never bandwidth-limited
+
+An IMU produces very little data. 6-axis at 12 bytes a sample:
+
+```
+ 50 Hz     600 B/s     6.0 % of a 100 kHz bus    0.18 % of 3.4 MHz
+100 Hz   1,200 B/s    12.0 %                            0.35 %
+200 Hz   2,400 B/s    24.0 %                            0.71 %
+400 Hz   4,800 B/s    48.0 %                            1.41 %
+1600 Hz 19,200 B/s   192.0 %  <- the BMI's maximum rate, and only 5.7 % of 3.4 MHz
+```
+
+So even at the sensor's top speed, a 3.4 MHz bus would be 94 % idle. **At any
+sane rate, 100 kHz was never the constraint.** Raising the clock would buy
+nothing for reading the IMU.
+
+## The compute side is even less of a constraint
+
+Which makes the whole premise worth checking. A tap/gesture detector is roughly:
+
+```
+compare 3 axes to a threshold        6 ops
+debounce counter update              3 ops
+state machine transition             5 ops
+                                  -------
+per sample                          15 ops  ->  3,000 ops/s at 200 Hz
+```
+
+Against that:
+
+```
+ESP32-S3   240 M ops/s   0.0013 % used
+ARC EM4     50 M ops/s   0.006  % used
+a 1 MHz 6502  1 M ops/s  0.3    % used
+```
+
+**Your instinct that a 6502 could do this is correct, with room to spare.** At
+200 Hz a 1 MHz 6502 uses three tenths of one percent of its cycles. The ARC core
+is roughly fifty times more capable than needed, and the bus is roughly ten times
+more capable than needed, for this particular job.
+
+Which reframes the chip entirely: **it is not short of capability. It is short of
+a reason to exist on this board.** Its only real advantage is that it runs on
+950 µA while the ESP32 sleeps — a power argument, never a performance one.
+
+## What a faster bus *would* change — and why it does not help
+
+At the part's I2C maximum of 3.4 MHz (Fast-mode Plus), the two workloads that
+were impossible become possible:
+
+```
+audio 44.1 kHz stereo   176,400 B/s   52 % of 3.4 MHz   fits
+frame 288x192 RGB565    110,592 B/s   33 % of 3.4 MHz   fits
+```
+
+But those are exactly the cases where the ARC core is too small to be worth
+using:
+
+- The chip has **no audio output** and no DAC. Where would the audio go?
+- The chip has **no path to this watch's panel**, which is on SPI2 under the
+  ESP32's control. Where would the pixels go?
+- And the ESP32-S3 already has an **I2S/DAC** for audio and a **PPA** for pixels,
+  both faster than the ARC core and needing no bus at all.
+
+So the faster bus unlocks only workloads with no output path, on a host that
+already does them better. **It is not a real unlock.**
+
+## Three nested ceilings, and the real one is the first
+
+Worth distinguishing, because "100 kHz" is not the silicon's fault:
+
+```
+BHI260AP I2C maximum        3.4 MHz    the part is not the limit
+ESP32-S3 hardware I2C max   ~1 MHz     the SoC's peripheral
+bit-banged i2c-gpio         ~100-400 kHz  what this board actually uses
+```
+
+**This board bit-bangs the bus on GPIO 3/2** (`compatible = "i2c-gpio"`), because
+there is no hardware I2C controller driver for the ESP32 in this kernel tree —
+`drivers/i2c/busses/` has no ESP32 entry at all. So the 100 kHz is a software
+choice driven by a missing driver, not a hardware property.
+
+In principle that is fixable in two steps, neither of which helps this use case:
+
+1. **Hardware I2C** — write an ESP32-S3 I2C controller driver (~1 MHz). Removes
+   the bit-bang overhead entirely.
+2. **Raise the clock** — 400 kHz is trivial for hardware I2C, 1 MHz achievable.
+
+Even both together give 10× on a link that is 94 % idle for IMU traffic. The gain
+would show up in **touch responsiveness**, not in anything the IMU does.
+
+## Conclusion
+
+| Question | Answer |
+|---|---|
+| Would max I2C let the IMU do more? | **No.** The IMU is 0.35 % of a 3.4 MHz bus. |
+| Would it make offload viable? | Only for audio and pixels, which have no output path and are already done better on-SoC. |
+| Is 100 kHz a hardware limit? | **No.** It is a bit-banged bus because no hardware I2C driver exists in this kernel. |
+| Is the bit-bang worth fixing? | **For touch latency, yes.** For the BHI260AP, no. |
+
+The frustration is fair, but it is aimed at the wrong thing. The bus is not
+wasting the chip — **the chip's capability was never the point.** It was put on
+this board to run for weeks on a coin cell's worth of current, and on that
+measure it is doing exactly what it was bought for. Everything it *could* be
+repurposed into is either already done better on the ESP32, or blocked by the
+signed-firmware requirement rather than by I2C.
