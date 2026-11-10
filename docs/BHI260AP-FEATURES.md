@@ -339,3 +339,155 @@ doing that loop again and how many times."**
 
 That is narrower than the original idea, and it is a real, working,
 no-SDK-required capability.
+
+---
+
+# Addendum: feeding it synthetic data — the real answer
+
+The question, precisely: *can we feed it replay data — say, a finger's x/y cycle
+from the touchscreen — and have it learn and spit back what it learned, or does it
+only take input from the IMU?*
+
+**Yes, you can feed it synthetic data. No, it does not have to come from the IMU.
+But you have to lie about what the data is, and the SDK stands in the way.**
+
+## The mechanism exists and Bosch built it for exactly this
+
+`Set Sensor Data Injection Mode (0x0007)` plus `Inject Sensor Data (0x0008)`. The
+datasheet is unusually direct about the intent:
+
+> "The purpose of the Sensor Data Injection mode is to support **debugging and
+> firmware-in-the-loop testing**. In this mode, the sensor input data to the
+> algorithms executed in the BHI260AP firmware is provided by the host, instead of
+> the physical sensors."
+>
+> "Due to this format it's **basically possible to replay previously recorded
+> output data**."
+
+So the black-box model is real. The host supplies the numbers, the algorithms run
+on them, the results come back. That part of the intuition is correct.
+
+## Constraint 1: every sample must claim to be a sensor
+
+Injected data is not free-form. Each sample is `[Sensor ID, Sensor Data,
+Timestamp]`, and the Sensor ID comes from a **fixed enumeration** — the BSX Input
+IDs at parameter `0x0120`:
+
+```
+ 1 Accelerometer      3 Gyroscope        5 Magnetometer
+ 7 Temp-Gyroscope     9 Anymotion        11 Pressure
+13 Position          15 Humidity         17 Temperature
+19 Gas Resistor      32 Step Counter    33 Step Detector
+34 Significant Motion 35 Any Motion     36 External Camera Input
+48 GPS               49 Light           50 Proximity
+```
+
+**You cannot declare "this is a touchscreen."** There is no user-defined sensor
+type. Every byte you push must be dressed as one of those.
+
+## Constraint 2 — and this one is smaller than it looks
+
+The self-learning algorithm does not know or care what the numbers *mean*. It
+sees a **time series of 3-axis vectors** and looks for a repeating shape.
+
+So: **encode your finger's path as accelerometer samples.**
+
+```
+touch x, y  ->  inject as Accelerometer(x, y, 0) at a steady rate
+timestamp   ->  monotonic, matching the rate the firmware asks for
+```
+
+The fusion library and the learning algorithm cannot distinguish that from a real
+accelerometer reading. They are doing geometry on numbers, not physics. Units are
+irrelevant to shape detection — though if absolute thresholds matter, scale your
+coordinates into a plausible acceleration range.
+
+**So the game idea is technically sound.** Feed the drag path, let it learn the
+cyclic ones, get a match back.
+
+## Constraint 3: the output is a classification, not a trajectory
+
+What you get back is not "here is the ideal version of your movement." It is:
+
+- **which pattern matched** (with an explicit no-match case), and
+- **a repetition count**, and
+- optionally the **pattern blob** — opaque, size reported by algorithm parameter
+  `7`, with no published format.
+
+The blob can be read out (`0x901` read), written back (`0x901` write), compared
+(`0x905`, returns an IEEE-754 float where 1.0 is identical), enabled and disabled
+(`0x904`). So you can **capture, store, re-upload and compare** patterns.
+
+You cannot meaningfully **synthesise** one, because the format is not published.
+That bounds "spit back out" to: you get the descriptor back in a form you can
+store and replay, not a form you can generate or edit.
+
+## Constraint 4: cyclic, and 0.3–1.8 Hz
+
+Unchanged from the earlier note. The pattern must **return to its starting point**
+to close a cycle, and repeats must take **0.56 to 3.33 seconds**.
+
+For a finger-on-touchscreen game that means: circling, figure-eights,
+twist-and-return, a repeated loop — at roughly one per second. **Not** swipes,
+lines, taps, or letters.
+
+## Constraint 5: the SDK, again, and it is absolute here
+
+> "A **dedicated firmware version is required** for this, which replaces the
+> standard physical sensor drivers with data injection drivers. **This can be
+> compiled using the SDK.**"
+
+Injection is the one feature that genuinely cannot be reached without Bosch. The
+stock firmware has no injection drivers, so there is nothing for the host to talk
+to.
+
+## So, direct answers
+
+| Question | Answer |
+|---|---|
+| Can we feed it fake data? | **Yes** — injection mode exists and is documented. |
+| Must input come from the IMU? | **No.** Host-supplied samples replace the physical sensors entirely. |
+| Can we feed touch x/y? | **Yes, dressed as accelerometer samples.** The algorithm sees 3-axis vectors, not a touchscreen. |
+| Can we feed other things? | **Also GPS (48) and camera input (36)** are accepted IDs — wider than just motion. |
+| Do we get a fitted motion patch back? | **No.** A match ID, a rep count, and an opaque pattern blob. |
+| Does it need the SDK? | **Yes. Absolutely.** No injection without custom firmware. |
+
+## The honest engineering note
+
+For the specific game described — moving a square with your finger — **you do not
+want this chip.**
+
+Recognising a circular drag on a 320×400 touchscreen is a few dozen lines of C on
+the ESP32-S3: accumulate the touch path, check the winding number and the radius
+stability, done. It costs no bus traffic, no SDK, no vendor dependency and no
+signed firmware.
+
+The BHI260AP would add: an SDK negotiation, a custom firmware build, a 100 kHz
+bottleneck, a 0.3–1.8 Hz speed limit, a cyclic-only constraint, and an output that
+is a class ID rather than the path you actually drew. **Every one of those is a
+cost the ESP32 does not pay.**
+
+The place injection genuinely pays is different and narrower: **offline
+exploration.** Record a real sensor stream once, then replay it thousands of times
+in *step-by-step* mode while sweeping parameters — without the hardware, without
+the motion, without a person wearing the watch. That is what Bosch built it for
+("firmware-in-the-loop testing"), and it is the one use where the SDK cost buys
+something the ESP32 cannot do for itself.
+
+## Where the value actually is, given all of the above
+
+The chip is worth using for the **on-chip features**, not for custom computation:
+
+- **glance** (94 µA) — wrist-raise-to-wake, a register write
+- **step counter** (98 µA) — read once a minute
+- **tilt** (37 µA), **significant motion** (37 µA)
+
+And worth *experimenting* with for:
+
+- **self-learning gestures**, taught by physically doing them — no SDK needed,
+  because that path uses the real IMU
+
+The one thing that needs the SDK and might earn it is **pattern comparison**
+(`0x905`): teach a handful of physical gestures, read the blobs, and use the
+similarity score to build a classifier tuned on real data. That is a genuine
+capability the ESP32 would have to be taught by hand.
