@@ -30,11 +30,12 @@ Tamagotchi P1 (1996)        the first one; 82M+ sold [general knowledge]
 Tamagotchi P1J              Japanese release
 Tamagotchi P2 (1997)        second generation
 Tamagotchi Angel (1997)     Tenshitchi — angel-themed, "good deeds" mechanic
-Tamagotchi Umino (1998)     Ocean/Oceangotchi — water theme
-Tamagotchi Morino (1998)    forest theme, insect characters
+Tamagotchi Umino (1997/98)  "Umino Tamagotchi" = Ocean / Oceangotchi — water theme
+Tamagotchi Morino (1997/98) "Mori no Tamagotchi" = Forest — insect characters
 Tamagotchi Mothra (1998)    Godzilla tie-in
-Tamagotchi Genjintch (1998) caveman theme
-Tamagotchi Yasashii (1998)  "gentle" — easiest of the line
+Tamagotchi Genjintch (1998) "Genjintchi" — caveman / primitive theme
+Tamagotchi Tamaotch (1998)  limited edition named after actress Tamao Nakamura
+Tamagotchi Yasashii (1998)  "gentle" — easiest of the line, 9 buttons
 ```
 
 **Digimon line**
@@ -54,8 +55,19 @@ RadioShack Stack Challenge  ROM present
 nikko                       ROM present
 ```
 
-**ROM availability: 3 of 18.** The famous ones — P1, P2, Angel, Morino, all the
-Digimon — ship no ROM.
+**ROM availability: 3 of 18.** Only AlienFever, Stack Challenge and nikko ship a
+ROM. Every Tamagotchi and every Digimon is distributed without one — confirmed
+against both MAME 0.289 (63,685 zips) and BrickEmuPy's own README.
+
+These are all **virtual pets, not games in different genres.** Each themed edition
+is the same 3-button egg form factor with different firmware and artwork — which
+is exactly why one emulator core covers all of them. The exceptions are Yasashii
+(9 buttons: food, smile, heart, clean, bulb, weight, select, cancel, reset) and
+Tamaotch (a celebrity tie-in).
+
+Three of them — Umino, Morino, Genjintch — share byte-identical shell geometry in
+BrickEmuPy's artwork (696x858 viewBox, 520 segments, 3 buttons), confirming they
+are the same hardware with different ROMs.
 
 **Why it's still the best choice:** it is the actual lineage. P1 and P2 are the
 devices the word "Tamagotchi" means to most people, and Angel/Umino/Morino are
