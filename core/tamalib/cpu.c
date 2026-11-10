@@ -2004,7 +2004,13 @@ int cpu_step(void)
 	handle_timers();
 
 	/* Check if there is any pending interrupt */
-	if (I && i != 0 && i != 58) { // Do not process interrupts after a PSET or EI operation
+	/* A halted CPU must still take interrupts - that is how it wakes.
+	 * The PSET/EI exclusion below only makes sense when an opcode actually just
+	 * executed, which is exactly when cpu_halted is clear. Upstream tests `i`
+	 * unconditionally, and `i` is uninitialised on the halted path, so wakeup
+	 * depended on stack garbage: correct by luck on most builds, and broken the
+	 * moment the byte happened to be 0. */
+	if (I && (cpu_halted || (i != 0 && i != 58))) { // Do not process interrupts after a PSET or EI operation
 		process_interrupts();
 	}
 

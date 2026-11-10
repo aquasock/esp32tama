@@ -344,6 +344,34 @@ of another; each is its own device.
 words (12,288 B); Angel/Mothra/Digimon are 8,192 words (16,384 B). The
 13-bit PC in TamaLib (`& 0x1FFF`) covers both, and no code change was needed.
 
+## The Angel's "death screen" was a wakeup bug
+
+Loading Angel showed a ghost and a gravestone, a continuous tone and no response
+to any button. That looked like the Angel's death screen, and the operator's
+instinct was that it needed a RAM reset.
+
+It did not. The CPU was halting at `pc=002A` with `I` set and **never being woken
+for 364 emulated seconds** — the screen and the tone were just the last state it
+had reached before it stopped.
+
+Cause: TamaLib gates interrupt dispatch on `if (I && i != 0 && i != 58)`, where
+`i` is an opcode-table index that is **uninitialised on the halted path**. Wakeup
+therefore depended on stack garbage. My first attempt at fixing it set `i = 0`,
+which made the condition permanently false while halted — so a halted CPU could
+never take an interrupt at all. That turned a flaky device into a reliably dead
+one.
+
+The correct fix excludes interrupts only when an opcode actually just executed:
+
+```c
+if (I && (cpu_halted || (i != 0 && i != 58)))
+```
+
+After it, Angel animates (3 distinct frames over 10M instructions, was 0) and the
+buttons move 90 of 512 RAM bytes instead of 1. Mothra and all three Digimon also
+start running properly — they had the same symptom and I had misread it as "these
+devices just halt".
+
 ## stackch does run — it was an out-of-bounds read
 
 The first version of this page said stackch was blank and did not run. That was

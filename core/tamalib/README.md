@@ -31,12 +31,20 @@ Upstream is **not** untouched. Two changes, both in `patches/`:
 **`0001-exec-counter.patch`** — a global instruction counter in `cpu_step()`,
 used by the benchmark to report instructions per frame.
 
-**`0002-init-step-index.patch`** — initialises `u8_t i = 0` in `cpu_step()`.
-Upstream leaves it uninitialised; when the CPU is halted the opcode-lookup loop
-never runs, but `i` is still read by the interrupt-dispatch test. A halted CPU's
-interrupt behaviour therefore depended on stack garbage, and the same ROM halted
-at different addresses in different builds. Found by noticing Angel halted at
-`pc=0A7B` in one build and `pc=002A` in another.
+**`0002-halted-interrupt-wakeup.patch`** — makes a halted CPU take interrupts.
+Upstream gates interrupt dispatch on `if (I && i != 0 && i != 58)`, where `i` is
+the opcode-table index. On the halted path no opcode is looked up, so `i` is
+**uninitialised**, and whether a halted CPU wakes depended on stack garbage.
+
+The exclusion is there to avoid dispatching an interrupt immediately after a
+PSET or EI instruction — which can only have just happened when `cpu_halted` is
+clear. So the correct test is `if (I && (cpu_halted || (i != 0 && i != 58)))`.
+
+Set `i = 0` instead and a halted CPU never takes an interrupt again, which is
+what a first attempt at this got wrong: the Angel booted, showed a ghost and a
+gravestone, played a continuous tone and never moved again — because it halted
+waiting for the timer interrupt that drives it and nothing ever woke it. With
+the patch it animates and the buttons change 90 of 512 RAM bytes instead of 1.
 
 ## Segment maps
 

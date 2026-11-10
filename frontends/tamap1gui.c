@@ -292,6 +292,20 @@ int main(int argc, char **argv)
     u32_t words = 0;
     u12_t *prog = load_rom(argv[1], &words);
     if (!prog) return 1;
+
+    /* Pick the segment map from the filename. The Tamagotchi family (P1, P2,
+     * Angel, Mothra) all share one measured map; Digimon is wired differently.
+     * Pass --digimon to force it for a differently-named dump. */
+    {
+        const char *base = strrchr(argv[1], '/');
+        base = base ? base + 1 : argv[1];
+        int digi = (strstr(base, "digimon") != NULL);
+        for (int i = 2; i < argc; i++)
+            if (!strcmp(argv[i], "--digimon")) digi = 1;
+        tamalib_set_segmap(digi ? HW_SEGMAP_DIGIMON : HW_SEGMAP_TAMAGOTCHI);
+        fprintf(stderr, "segmap: %s\n", digi ? "digimon" : "tamagotchi");
+    }
+    if (!prog) return 1;
     fprintf(stderr, "rom: %u words (%u bytes)\n", words, words * 2);
 
     g_hal_impl.update_screen = hal_update_screen;
