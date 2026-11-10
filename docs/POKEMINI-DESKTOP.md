@@ -39,11 +39,15 @@ the same round. That was the one path the front end carried with no listening
 test behind it, and it now has one — on one cartridge, which is a first
 datapoint rather than a closed question.
 
-This is coverage of five distinct retail products (Pinball, Tetris, Zany Cards,
-Puzzle Collection, Party Mini) plus the five Party Mini variants and the two
-Lunch Time discs. It is **not** the full commercial library: Race mini, Pichu
-Bros. mini, Breeder mini and Sodateyasan mini are not in this set and remain
-untested.
+This is coverage of five of the ten retail titles — Party mini, Pinball mini,
+Puzzle Collection, Zany Cards, Tetris — plus the five Party mini GameCube discs
+and the two Lunch Time discs, twelve images in all.
+
+**The five we do not hold are all Japan-only:** Puzzle Collection vol. 2, Race
+mini, Pichu Bros. mini, Togepi's Great Adventure, and Breeder mini (＝
+Sodateyasan mini). Full release table with dates in `CATALOGUE.md`. Nothing
+technical blocks any of them; they simply never left Japan, and a Western cart
+set covers half the library and stops.
 
 Before the play round, verified on a desktop with the actual BIOS: all twelve
 boot and render, with no cartridge blanking or hanging after power-on.

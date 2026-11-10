@@ -192,21 +192,43 @@ core is nearly free, since we already have the instruction set.
 ## Pokémon Mini — Seiko S1C88, 4 MHz, 96x64
 
 Not in BrickEmuPy; assessed from `libretro/PokeMini` source. Exactly **ten**
-commercial games, which makes this list complete rather than a top-ten:
+commercial games were released, which makes the list complete rather than a
+top-ten. Verified against Wikipedia's release table, which carries North
+America / Japan / Europe dates per title, and cross-checked against MAME 0.261's
+`pokemini` software list (43 images, all regional and preview variants).
 
 ```
-Pokémon Party mini          a collection of six minigames
-Pokémon Pinball mini        pinball
-Pokémon Puzzle Collection   puzzle set
-Pokémon Zany Cards          card games
-Pokémon Tetris              released as Pokémon Shock Tetris in Japan
-Pokémon Race mini           racing
-Pichu Bros. mini            starring Pichu
-Pokémon Breeder mini        raising/breeding
-Pokémon Sodateyasan mini    JP only, "raising" game
-Pokémon Kogane/other JP-only titles   [uncertain — I could not confirm the
-                                       exact tenth without a source]
+Title                              NA        JP        EU     held
+Pokémon Party mini              2001-11-15 2001-12-14 2002-03-15  yes
+Pokémon Pinball mini            2001-11-15 2001-12-14 2002-03-15  yes
+Pokémon Puzzle Collection       2001-11-15 2001-12-14 2002-03-15  yes
+Pokémon Zany Cards              2001-11-15 2001-12-14 2002-03-15  yes
+Pokémon Tetris                     --      2002-03-21 2002-09     yes
+Pokémon Puzzle Collection vol. 2   --      2002-04-26    --        no
+Pokémon Race mini                  --      2002-07-19    --        no
+Pichu Bros. mini                   --      2002-08-09    --        no
+Togepi's Great Adventure           --      2002-10-18    --        no
+Pokémon Breeder mini               --      2002-12-14    --        no
 ```
+
+**All five unheld retail titles are Japan-only.** They never left Japan, which
+is why a Western cart set covers five of ten and stops.
+
+Three naming traps, all of which earlier versions of this file got wrong:
+
+- **Pokémon Breeder mini is ポケモンそだてやさんミニ** — *Sodateyasan* mini. These
+  are **one game, not two**, and not a tenth mystery title. MAME's `pokesoda`
+  is the same product as the Breeder mini row above.
+- **Pokémon Anime Card Daisakusen (ポケモンアニメカード大作戦) is the Japanese
+  release of Pokémon Zany Cards**, not a separate game. MAME's `pokeacrd` is
+  that JP cart; the three Western Zany Cards entries sit alongside it.
+- There is **no "Pokémon Kogane"**. An earlier version of this list guessed at a
+  missing tenth title by that name; the tenth row is Togepi's Great Adventure.
+
+Separately from the ten retail carts, six Party mini minigames were distributed
+two ways — inside the retail Party mini cartridge, and as individual GameCube
+bonus discs. Plus Lunch Time / Snorlax's Lunch Time as GameCube discs. Those are
+not part of the ten.
 
 Plus an active **homebrew** scene with freely licensed ROMs.
 
