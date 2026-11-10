@@ -6,14 +6,47 @@ machine first, then carry it across.
 
 ## Status
 
-**Playable.** Confirmed by the operator, in play, on 2026-11-09: Pokémon Pinball
-started, the clock was set, and **two levels were cleared**. That is the only
-test that covers the whole chain at once — BIOS handover, cartridge execution,
-PRC rendering, display refresh and input — and it passed.
+**Playable, across the whole cartridge set we hold.** Confirmed by the operator,
+in play, on 2026-11-09: Pokémon Pinball started, the clock was set, and **two
+levels were cleared**. That is the only test that covers the whole chain at
+once — BIOS handover, cartridge execution, PRC rendering, display refresh and
+input — and it passed.
 
-Before that, verified on a desktop with the actual BIOS and twelve cartridges:
-Pinball, Tetris, Puzzle Collection, Zany Cards, Lunch Time, Party Mini and the
-GameCube variants. All boot and render.
+Every one of the twelve images was then played, not merely swept. Operator
+verdict per image, all in play on 2026-11-09:
+
+```
+Pokemon Pinball Mini (USA, Europe)                  pass  - two levels cleared
+Pokemon Tetris (Europe) (En,Ja,Fr)                  pass
+Pokemon Zany Cards (USA, Europe)                    pass
+Pokemon Puzzle Collection (USA, Europe)             pass
+Pokemon Party Mini (USA)                            pass
+Lunch Time (USA) (GameCube)                         pass
+Snorlax's Lunch Time (Europe) (GameCube)            pass
+Party Mini - Baseline Judge (USA) (GameCube)        pass
+Party Mini - Chansey's Dribble (Europe) (GameCube)  pass
+Party Mini - Ricochet Dribble (USA) (GameCube)      pass
+Party Mini - Rocket Start (USA) (GameCube)          pass
+Party Mini - Slowking's Judge (Europe) (GameCube)   pass
+```
+
+Ricochet Dribble was additionally cold-relaunched mid-round and replayed from a
+fresh PID, which rules out a warm-process artefact. No save state exists on
+disk, so every launch was a genuine cold boot.
+
+**Audio has its first listening test.** Tetris's title music played correctly in
+the same round. That was the one path the front end carried with no listening
+test behind it, and it now has one — on one cartridge, which is a first
+datapoint rather than a closed question.
+
+This is coverage of five distinct retail products (Pinball, Tetris, Zany Cards,
+Puzzle Collection, Party Mini) plus the five Party Mini variants and the two
+Lunch Time discs. It is **not** the full commercial library: Race mini, Pichu
+Bros. mini, Breeder mini and Sodateyasan mini are not in this set and remain
+untested.
+
+Before the play round, verified on a desktop with the actual BIOS: all twelve
+boot and render, with no cartridge blanking or hanging after power-on.
 
 What each automated check covers, so the gaps are obvious:
 
@@ -174,10 +207,13 @@ Both `pokemini_bench` and `pmgui` now reset after loading.
 
 ## What this does not yet do
 
-- **No audio verification.** The path is wired (44.1 kHz, `MinxAudio_GetSamplesS16`
-  into a queued SDL device) and the mute key works, but nothing has confirmed
-  that the right sounds come out. That needs a listening test, which is the
-  operator's job, not a build's.
+- **Audio has one listening test, not a suite.** The path is wired (44.1 kHz,
+  `MinxAudio_GetSamplesS16` into a queued SDL device), the mute key works, and
+  Pokémon Tetris's title music played correctly in the 2026-11-09 play round.
+  That retires the old "never listened to" gap for one cartridge. It does not
+  establish that the rest of the sound path is right — a cartridge that leans on
+  a channel, a waveform or a volume behaviour Tetris does not use could still be
+  wrong with nothing here to catch it. Treat audio as *started*, not *settled*.
 - **No dirty-rectangle rendering.** It redraws all 96×64 every frame, which is
   free on a desktop. The watch port cannot afford that; see
   `POKEMINI-DISPLAY-GATE.md`.
