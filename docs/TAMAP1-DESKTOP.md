@@ -344,6 +344,39 @@ of another; each is its own device.
 words (12,288 B); Angel/Mothra/Digimon are 8,192 words (16,384 B). The
 13-bit PC in TamaLib (`& 0x1FFF`) covers both, and no code change was needed.
 
+## Mothra logs out-of-range writes — and they are harmless
+
+Mothra emits 26 warnings per frame:
+
+```
+Write 0x0 to invalid memory address 0xE66 - PC = 0x01E0
+```
+
+`0xE66-0xE7F` falls in an unused hole between the two display banks. I assumed
+that was a TamaLib sizing bug, widened `MEM_DISPLAY1_SIZE` from `0x066` to
+`0x080` to make the banks contiguous, wrote a confident comment about the panel
+coming out wrong, and **was wrong on every count.**
+
+An A/B build of the patched and unpatched cores gives byte-identical output:
+
+```
+Mothra, 0x080 (patched):  pc=106B  lit=76
+Mothra, 0x066 (upstream): pc=106B  lit=76
+```
+
+Upstream's sizes are exactly right, and the arithmetic is clean: `set_lcd()`
+maps each segment to **two** nibbles (`seg = n >> 1`, low bit picking coms 0-3 or
+4-7), so 51 segments need 102 nibbles = `0x066` and 40 need 80 = `0x050`. The
+hole is unused space, and Mothra writes into segments 51-63 which the S48 does
+not have. Rejecting them is correct.
+
+**The warnings are informational.** Mothra runs fine with them. The patch was
+reverted; nothing was fixed because nothing was broken.
+
+Worth recording because it is the second time in this session that a plausible
+theory produced a confident but unfounded patch. The A/B test is what caught it,
+and it should have been the first thing run.
+
 ## The Angel's "death screen" was a wakeup bug
 
 Loading Angel showed a ghost and a gravestone, a continuous tone and no response
