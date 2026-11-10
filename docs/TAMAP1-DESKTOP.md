@@ -321,7 +321,7 @@ format changed and the loader needs looking at.
 Ran 2026-11-09 against the ROMs the operator extracted from the MAME 0.289
 non-merged set. Tool: `tools/tamap1_verify.c`.
 
-## Results — 7 of 8 draw, 1 does not
+## Results — all 8 draw
 
 ```
 device      ROM words  pc      halted  lit   icons   verdict
@@ -344,7 +344,18 @@ of another; each is its own device.
 words (12,288 B); Angel/Mothra/Digimon are 8,192 words (16,384 B). The
 13-bit PC in TamaLib (`& 0x1FFF`) covers both, and no code change was needed.
 
-## stackch does not run
+## stackch does run — it was an out-of-bounds read
+
+The first version of this page said stackch was blank and did not run. That was
+wrong, and the cause was mine: the new Digimon segment table was 37 entries, but
+`hw_set_lcd_pin` indexes it by `seg`, which runs to 39 or 50. Reading past the
+end gave garbage x-coordinates, which corrupted the panel state for every device
+and made several of them halt at nonsense addresses.
+
+Padded the table to the full array size with icon values. stackch then draws 256
+pixels and four icons.
+
+## stackch: the earlier theory, for the record
 
 `stackch` clears the display, draws a 256-pixel pattern once, clears it again,
 and halts at `pc=01FB` permanently. Confirmed over 10M instructions: one display
